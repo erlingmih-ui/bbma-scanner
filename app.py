@@ -47,17 +47,20 @@ def detect(df, lb=15):
     arah_b = (c > mid) & (c > h5) & (c > h10)
     # tendance mémorisée (m_lastTrendDir) : dernier MOM / Arah
     trend = pd.Series(np.where(mom_b | arah_b, 1, np.where(mom_s | arah_s, -1, np.nan)), index=c.index).ffill()
+    # RE : la tendance doit provenir d'un MOM/CSAK dans les `lb` dernières bougies (pas d'ancien setup)
+    recent = (mom_b | arah_b | mom_s | arah_s).astype(int).rolling(lb, min_periods=1).max().astype(bool)
+    trend = trend.where(recent)
     # Zones MA5/MA10
     zone_buy_hi, zone_buy_lo = np.maximum(l5, l10), np.minimum(l5, l10)
     zone_sell_hi, zone_sell_lo = np.maximum(h5, h10), np.minimum(h5, h10)
 
     # RE strict : bougie précédente HORS zone, bougie actuelle DANS la zone
     re_b = ((trend == 1)                                                    # RE
-            & (c.shift(1) < zone_buy_lo.shift(1))
+            & (c.shift(1) > zone_buy_hi.shift(1))    # buy : précédente AU-DESSUS de la zone
             & (c >= zone_buy_lo) & (c <= zone_buy_hi)
             & (l <= zone_buy_hi))
     re_s = ((trend == -1)                                                   # RE
-            & (c.shift(1) > zone_sell_hi.shift(1))
+            & (c.shift(1) < zone_sell_lo.shift(1))   # sell : précédente EN-DESSOUS de la zone
             & (c >= zone_sell_lo) & (c <= zone_sell_hi)
             & (h >= zone_sell_lo))
 
