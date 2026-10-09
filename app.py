@@ -1,5 +1,6 @@
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 st.set_page_config(page_title="BBMA OA MTF Scanner", layout="wide")
 st.title("BBMA OA MTF Scanner")
@@ -99,7 +100,7 @@ def _d1_trend(pair):
     c = df["Close"]
     return "B" if c.iloc[-1] > c.ewm(span=50, adjust=False).mean().iloc[-1] else "S"
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=240, show_spinner=False)   # < 5 min : chaque cycle auto refait un vrai scan
 def run_scan(pairs, tfs):
     """Scan complet (mis en cache 5 min). Les threads n'appellent aucune fonction Streamlit."""
     jobs = [(p, t) for p in pairs for t in tfs]
@@ -108,7 +109,7 @@ def run_scan(pairs, tfs):
         trends = list(ex.map(_d1_trend, pairs))
     res = {j: r for j, (r, _) in zip(jobs, out)}
     failed = sum(1 for _, ok in out if not ok)
-    return res, dict(zip(pairs, trends)), failed, len(jobs)
+    return res, dict(zip(pairs, trends)), failed, len(jobs), datetime.now(timezone.utc)
 
 pairs = list(dict.fromkeys(st.sidebar.text_area(f"Paires (max {MAX_PAIRS})", DEFAULT_PAIRS).upper().split()))
 if len(pairs) > MAX_PAIRS:
@@ -116,16 +117,11 @@ if len(pairs) > MAX_PAIRS:
     pairs = pairs[:MAX_PAIRS]
 tfs = st.sidebar.multiselect("Timeframes", list(TFS), list(TFS))
 use_filter = st.sidebar.checkbox("Filtre D1 (EMA50)", True)
+auto = st.sidebar.checkbox("Scan automatique toutes les 5 min", True)
 if st.sidebar.button("Rafraîchir"): st.cache_data.clear()
 if not pairs or not tfs:
     st.info("Choisis au moins une paire et un timeframe dans la barre latérale.")
     st.stop()
-
-with st.spinner("Scan en cours..."):
-    res, trends, failed, total = run_scan(tuple(pairs), tuple(tfs))
-if failed:
-    st.warning(f"{failed}/{total} téléchargements sans données (limite yfinance, marché fermé ou symbole invalide). "
-               "Clique sur Rafraîchir dans quelques instants.")
 
 import html
 
@@ -163,22 +159,33 @@ def cell_html(code, d):
     return (f'<td class="{"buy" if d == "B" else "sell"}{strong}" title="{tip}">'
             f'<b>{code}</b> {ARROW[d]}{tpw}</td>')
 
-body = []
-for p in pairs:
-    cells, tds = {}, []
-    for t in tfs:
-        code, d = res[(p, t)]
-        cells[t] = (code, d)
-        tds.append(cell_html(code, d))
-    m, d = mtf_code(cells)
-    if m and use_filter:
-        tr = trends.get(p)
-        if tr and tr != d: m = None   # signal contre la tendance D1 (EMA50) -> ignoré
-    mtf = (f'<td class="mtf {"buy" if d == "B" else "sell"}">{m} {ARROW[d]}</td>' if m
-           else '<td class="mtf none">–</td>')
-    body.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}{mtf}</tr>')
-head = ('<tr><th class="pair">Pair</th>' + "".join(f"<th>{t}</th>" for t in tfs) + '<th class="hmtf">Code MTF</th></tr>')
-st.markdown(CSS + f'<div class="bb-wrap"><table class="bb">{head}{"".join(body)}</table></div>', unsafe_allow_html=True)
-st.caption("▲ Buy · ▼ Sell · MOM=Momentum · EXM=Extreme Magic (MA10) · EXT=Extreme (MA5) · TPW=TP Wajib (avec EXM/EXT) · MHV · CSAK=Candle Arah · RE=Reentry. "
-           "Code MTF : REM = D1 RE + H4 EXT + H1 MHV · RRE = RE + RE + EXT · REE = RE + EXT + EXT (même sens). "
-           "Survole une cellule pour voir le nom du signal. Filtre D1 : signal gardé seulement s'il suit la tendance D1 (clôture vs EMA50).")
+@st.fragment(run_every=300 if auto else None)   # relance seulement cette partie, toutes les 5 min
+def live():
+    with st.spinner("Scan en cours..."):
+        res, trends, failed, total, ts = run_scan(tuple(pairs), tuple(tfs))
+    if failed:
+        st.warning(f"{failed}/{total} téléchargements sans données (limite yfinance, marché fermé ou symbole invalide). "
+                   "Clique sur Rafraîchir dans quelques instants.")
+
+    body = []
+    for p in pairs:
+        cells, tds = {}, []
+        for t in tfs:
+            code, d = res[(p, t)]
+            cells[t] = (code, d)
+            tds.append(cell_html(code, d))
+        m, d = mtf_code(cells)
+        if m and use_filter:
+            tr = trends.get(p)
+            if tr and tr != d: m = None   # signal contre la tendance D1 (EMA50) -> ignoré
+        mtf = (f'<td class="mtf {"buy" if d == "B" else "sell"}">{m} {ARROW[d]}</td>' if m
+               else '<td class="mtf none">–</td>')
+        body.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}{mtf}</tr>')
+    head = ('<tr><th class="pair">Pair</th>' + "".join(f"<th>{t}</th>" for t in tfs) + '<th class="hmtf">Code MTF</th></tr>')
+    st.markdown(CSS + f'<div class="bb-wrap"><table class="bb">{head}{"".join(body)}</table></div>', unsafe_allow_html=True)
+    st.caption("▲ Buy · ▼ Sell · MOM=Momentum · EXM=Extreme Magic (MA10) · EXT=Extreme (MA5) · TPW=TP Wajib (avec EXM/EXT) · MHV · CSAK=Candle Arah · RE=Reentry. "
+               "Code MTF : REM = D1 RE + H4 EXT + H1 MHV · RRE = RE + RE + EXT · REE = RE + EXT + EXT (même sens). "
+               "Survole une cellule pour voir le nom du signal. Filtre D1 : signal gardé seulement s'il suit la tendance D1 (clôture vs EMA50).")
+    st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC" + (" · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"))
+
+live()
