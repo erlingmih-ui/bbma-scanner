@@ -15,7 +15,7 @@ TFS = {"MN": ("1mo", "10y", None), "W1": ("1wk", "5y", None), "D1": ("1d", "2y",
        "H4": ("1h", "180d", "4h"), "H1": ("1h", "60d", None), "M15": ("15m", "30d", None), "M5": ("5m", "30d", None)}
 PRIORITY = ["MOM", "EXM", "EXT", "MHV", "CSAK", "RE"]   # priorité de détection (cycle BBMA)
 
-# Codes MTF (colonne de droite) : combinaison de signaux sur D1 / H4 / H1, même sens (B ou S).
+# Codes MTF : conservés (mtf_code n'est plus appelée dans live(), mais la fonction reste définie).
 PATTERNS = {
     "REM": [("D1", "RE"), ("H4", "EXT"), ("H1", "MHV")],   # Reentry - Extreme - MHV
     "RRE": [("D1", "RE"), ("H4", "RE"), ("H1", "EXT")],    # Reentry - Reentry - Extreme
@@ -67,6 +67,55 @@ def mtf_code(cells):
             dirs = {cells[tf][1] for tf, _ in conds}
             if len(dirs) == 1: return code, dirs.pop()
     return None, None
+
+# --- Entrée BBMA et Confiance ---------------------------------------------
+TF_ORDER = ["MN", "W1", "D1", "H4", "H1", "M15", "M5"]   # du plus haut au plus bas
+SIG_DIRECTEUR = {"MOM", "EXM", "EXT", "RE"}              # signaux de structure
+SIG_ENTREE = {"RE", "MHV", "CSAK"}                       # signaux déclencheurs
+
+def synthese(cells, tf_dispo, use_filter, d1_trend):
+    """Synthèse multi-TF BBMA Oma Ally.
+    cells : {tf: (code, sens)} ; tf_dispo : TF scannés ; d1_trend : 'B', 'S' ou None.
+    Retourne (tf_entree, code_entree, sens) ou (None, None, None)."""
+    # TF scannés, du plus haut au plus bas
+    tfs_ord = [t for t in TF_ORDER if t in tf_dispo]
+
+    # 1. TF directeur : le plus haut TF ayant un signal de structure
+    idx = None
+    for i, t in enumerate(tfs_ord):
+        if cells.get(t, (None, None))[0] in SIG_DIRECTEUR:
+            idx = i
+            break
+    if idx is None:
+        return None, None, None
+    tf_dir = tfs_ord[idx]
+    code_dir, sens = cells[tf_dir]
+
+    # 4. Un TF supérieur au directeur qui contredit le sens -> pas de trade
+    for t in tfs_ord[:idx]:
+        code, d = cells.get(t, (None, None))
+        if code and d != sens:
+            return None, None, None
+
+    # 5. Filtre D1 (EMA50) : sens contre la tendance D1 -> pas de trade
+    if use_filter and d1_trend and d1_trend != sens:
+        return None, None, None
+
+    # 2. TF d'entrée plus bas que le directeur, même sens (le plus proche du directeur)
+    for t in tfs_ord[idx + 1:]:
+        code, d = cells.get(t, (None, None))
+        if code in SIG_ENTREE and d == sens:
+            return t, code, sens
+
+    # 3. Aucun TF d'entrée trouvé : le directeur sert d'entrée
+    return tf_dir, code_dir, sens
+
+def confiance_score(cells, tfs, sens_ref):
+    """Part des TF scannés ayant un signal dans le même sens que l'entrée BBMA (0 à 1)."""
+    if not tfs or sens_ref is None:
+        return None
+    n = sum(1 for t in tfs if cells.get(t, (None, None))[1] == sens_ref)
+    return n / len(tfs)
 
 def _history(pair, interval, period):
     """Télécharge les bougies (2 essais). Retourne un DataFrame OHLC propre, ou None."""
@@ -140,10 +189,16 @@ table.bb td.strong{box-shadow:inset 3px 0 0 currentColor}
 table.bb td:not(.none):hover{transform:translateY(-1px);filter:brightness(1.3);box-shadow:0 4px 14px rgba(0,0,0,.55)}
 table.bb tr:hover th.pair{color:#fff}
 table.bb .tpw{margin-left:6px;padding:1px 5px;border-radius:4px;font-size:10px;background:#2962ff;color:#fff}
-table.bb td.mtf{font-weight:700;font-size:14px;min-width:90px}
-table.bb td.mtf.none{background:#2a2e39;color:#787b86}
-table.bb td.mtf.buy{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166,154,.55)}
-table.bb td.mtf.sell{background:#ef5350;color:#fff;box-shadow:0 0 14px rgba(239,83,80,.55)}
+/* Entrée BBMA (synthèse multi-TF) */
+table.bb td.synth{font-weight:700;font-size:13px;min-width:110px}
+table.bb td.synth.none{background:#2a2e39;color:#787b86}
+table.bb td.synth.buy{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166,154,.55)}
+table.bb td.synth.sell{background:#ef5350;color:#fff;box-shadow:0 0 14px rgba(239,83,80,.55)}
+/* Confiance (part des TF en confluence) */
+table.bb td.conf{font-weight:700;font-size:14px;min-width:70px}
+table.bb td.conf.high{background:#26a69a;color:#fff}
+table.bb td.conf.mid{background:#2962ff;color:#fff}
+table.bb td.conf.low,table.bb td.conf.none{background:#2a2e39;color:#787b86}
 </style>"""
 
 ARROW = {"B": "▲", "S": "▼"}
@@ -158,6 +213,20 @@ def cell_html(code, d):
     tip = NAMES.get(code, code) + (" · Buy" if d == "B" else " · Sell")
     return (f'<td class="{"buy" if d == "B" else "sell"}{strong}" title="{tip}">'
             f'<b>{code}</b> {ARROW[d]}{tpw}</td>')
+
+def synth_cell(tf, code, d):
+    """Cellule 'Entrée BBMA' : TF d'entrée, code du signal et sens."""
+    if not tf: return '<td class="synth none">–</td>'
+    cls = "buy" if d == "B" else "sell"
+    tip = f"Entrée {tf} · {NAMES.get(code, code)}" + (" · Buy" if d == "B" else " · Sell")
+    return f'<td class="synth {cls}" title="{tip}"><b>{tf}</b> {code} {ARROW[d]}</td>'
+
+def conf_cell(score):
+    """Cellule 'Confiance' : pourcentage avec code couleur (vert >= 70%, bleu 40-69%, gris < 40%)."""
+    if score is None: return '<td class="conf none">–</td>'
+    pct = round(score * 100)
+    cls = "high" if pct >= 70 else "mid" if pct >= 40 else "low"
+    return f'<td class="conf {cls}">{pct}%</td>'
 
 @st.fragment(run_every=300 if auto else None)   # relance seulement cette partie, toutes les 5 min
 def live():
@@ -174,18 +243,20 @@ def live():
             code, d = res[(p, t)]
             cells[t] = (code, d)
             tds.append(cell_html(code, d))
-        m, d = mtf_code(cells)
-        if m and use_filter:
-            tr = trends.get(p)
-            if tr and tr != d: m = None   # signal contre la tendance D1 (EMA50) -> ignoré
-        mtf = (f'<td class="mtf {"buy" if d == "B" else "sell"}">{m} {ARROW[d]}</td>' if m
-               else '<td class="mtf none">–</td>')
-        body.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}{mtf}</tr>')
-    head = ('<tr><th class="pair">Pair</th>' + "".join(f"<th>{t}</th>" for t in tfs) + '<th class="hmtf">Code MTF</th></tr>')
+        # Entrée BBMA (synthèse multi-TF, filtre D1 inclus) puis Confiance
+        tf_e, code_e, sens_e = synthese(cells, tfs, use_filter, trends.get(p))
+        score = confiance_score(cells, tfs, sens_e) if sens_e else None
+        tds.append(synth_cell(tf_e, code_e, sens_e))
+        tds.append(conf_cell(score))
+        body.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}</tr>')
+    head = ('<tr><th class="pair">Pair</th>' + "".join(f"<th>{t}</th>" for t in tfs)
+            + '<th class="hmtf">Entrée BBMA</th><th class="hmtf">Confiance</th></tr>')
     st.markdown(CSS + f'<div class="bb-wrap"><table class="bb">{head}{"".join(body)}</table></div>', unsafe_allow_html=True)
     st.caption("▲ Buy · ▼ Sell · MOM=Momentum · EXM=Extreme Magic (MA10) · EXT=Extreme (MA5) · TPW=TP Wajib (avec EXM/EXT) · MHV · CSAK=Candle Arah · RE=Reentry. "
-               "Code MTF : REM = D1 RE + H4 EXT + H1 MHV · RRE = RE + RE + EXT · REE = RE + EXT + EXT (même sens). "
-               "Survole une cellule pour voir le nom du signal. Filtre D1 : signal gardé seulement s'il suit la tendance D1 (clôture vs EMA50).")
+               "Survole une cellule pour voir le nom du signal. "
+               "Entrée BBMA : TF directeur (MOM/EXM/EXT/RE) + TF d'entrée plus bas (RE/MHV/CSAK) dans le même sens, "
+               "annulé si un TF supérieur contredit ou si le sens va contre le filtre D1 (clôture vs EMA50). "
+               "Confiance : part des TF scannés dans le même sens que l'entrée (vert ≥ 70% · bleu 40–69% · gris < 40%).")
     st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC" + (" · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"))
 
 live()
