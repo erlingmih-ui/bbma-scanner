@@ -47,8 +47,19 @@ def detect(df, lb=15):
     arah_b = (c > mid) & (c > h5) & (c > h10)
     # tendance mémorisée (m_lastTrendDir) : dernier MOM / Arah
     trend = pd.Series(np.where(mom_b | arah_b, 1, np.where(mom_s | arah_s, -1, np.nan)), index=c.index).ffill()
-    re_s = (trend == -1) & (c < mid) & (h >= np.minimum(h5, h10)) & (c <= np.maximum(h5, h10))   # RE
-    re_b = (trend == 1) & (c > mid) & (l <= np.maximum(l5, l10)) & (c >= np.minimum(l5, l10))
+    # Zones MA5/MA10
+    zone_buy_hi, zone_buy_lo = np.maximum(l5, l10), np.minimum(l5, l10)
+    zone_sell_hi, zone_sell_lo = np.maximum(h5, h10), np.minimum(h5, h10)
+
+    # RE strict : bougie précédente HORS zone, bougie actuelle DANS la zone
+    re_b = ((trend == 1)                                                    # RE
+            & (c.shift(1) > zone_buy_hi.shift(1))    # buy : précédente AU-DESSUS de la zone
+            & (c >= zone_buy_lo) & (c <= zone_buy_hi)
+            & (l <= zone_buy_hi))
+    re_s = ((trend == -1)                                                   # RE
+            & (c.shift(1) < zone_sell_lo.shift(1))   # sell : précédente EN-DESSOUS de la zone
+            & (c >= zone_sell_lo) & (c <= zone_sell_hi)
+            & (h >= zone_sell_lo))
 
     sig = {"MOM": (mom_b, mom_s), "EXM": (exm_b, exm_s), "EXT": (ext_b, ext_s),
            "MHV": (mhv_b, mhv_s), "CSAK": (arah_b, arah_s), "RE": (re_b, re_s)}
@@ -71,7 +82,7 @@ def mtf_code(cells):
 # --- Entrée BBMA et Confiance ---------------------------------------------
 TF_ORDER = ["MN", "W1", "D1", "H4", "H1", "M15", "M5"]   # du plus haut au plus bas
 SIG_DIRECTEUR = {"MOM", "EXM", "EXT", "RE"}              # signaux de structure
-SIG_ENTREE = {"RE", "MHV", "CSAK"}                       # signaux déclencheurs
+SIG_ENTREE = {"RE", "MHV", "CSAK", "EXT"}                # signaux déclencheurs (EXT inclus pour M15/M5)
 
 def synthese(cells, tf_dispo, use_filter, d1_trend):
     """Synthèse multi-TF BBMA Oma Ally.
@@ -136,6 +147,8 @@ def _scan_one(pair, tf):
     if df is None: return (None, None), False
     if rs:
         df = df.resample(rs).agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
+    # Exclure la dernière bougie en cours de formation (critique sur M5/M15)
+    df = df.iloc[:-1]
     if len(df) < 60: return (None, None), False
     try:
         return detect(df), True
@@ -252,11 +265,12 @@ def live():
     head = ('<tr><th class="pair">Pair</th>' + "".join(f"<th>{t}</th>" for t in tfs)
             + '<th class="hmtf">Entrée BBMA</th><th class="hmtf">Confiance</th></tr>')
     st.markdown(CSS + f'<div class="bb-wrap"><table class="bb">{head}{"".join(body)}</table></div>', unsafe_allow_html=True)
-    st.caption("▲ Buy · ▼ Sell · MOM=Momentum · EXM=Extreme Magic (MA10) · EXT=Extreme (MA5) · TPW=TP Wajib (avec EXM/EXT) · MHV · CSAK=Candle Arah · RE=Reentry. "
+    st.caption("▲ Buy · ▼ Sell · MOM=Momentum · EXM=Extreme Magic (MA10) · EXT=Extreme (MA5) · TPW=TP Wajib (avec EXM/EXT) · MHV · CSAK=Candle Arah · RE=Reentry (strict : retour depuis l'extérieur de la zone MA5/MA10). "
                "Survole une cellule pour voir le nom du signal. "
-               "Entrée BBMA : TF directeur (MOM/EXM/EXT/RE) + TF d'entrée plus bas (RE/MHV/CSAK) dans le même sens, "
+               "Entrée BBMA : TF directeur (MOM/EXM/EXT/RE) + TF d'entrée plus bas (RE/MHV/CSAK/EXT) dans le même sens, "
                "annulé si un TF supérieur contredit ou si le sens va contre le filtre D1 (clôture vs EMA50). "
-               "Confiance : part des TF scannés dans le même sens que l'entrée (vert ≥ 70% · bleu 40–69% · gris < 40%).")
+               "Confiance : part des TF scannés dans le même sens que l'entrée (vert ≥ 70% · bleu 40–69% · gris < 40%). "
+               "Les bougies non clôturées sont exclues du scan.")
     st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC" + (" · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"))
 
 live()
