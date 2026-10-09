@@ -27,7 +27,7 @@ def wma(s, n):
     w = np.arange(1, n + 1)
     return s.rolling(n).apply(lambda x: (x * w).sum() / w.sum(), raw=True)
 
-def detect(df, lb=15):
+def detect(df, lb=15, with_re=False):
     """Signal de la dernière bougie : (code, sens) avec sens 'B' (buy) ou 'S' (sell).
     Priorité : MOM > EXM (Extreme Magic, MA10) > EXT (MA5) > MHV > CSAK (Candle Arah) > RE.
     TP Wajib = flag déclenché par EXM/EXT uniquement (affiché à côté du code)."""
@@ -46,9 +46,9 @@ def detect(df, lb=15):
     arah_s = (c < mid) & (c < l5) & (c < l10)                                   # CSAK / Candle Arah
     arah_b = (c > mid) & (c > h5) & (c > h10)
     # tendance mémorisée (m_lastTrendDir) : dernier MOM / Arah
-    trend = pd.Series(np.where(mom_b | arah_b, 1, np.where(mom_s | arah_s, -1, np.nan)), index=c.index).ffill()
-    # RE : la tendance doit provenir d'un MOM/CSAK dans les `lb` dernières bougies (pas d'ancien setup)
-    recent = (mom_b | arah_b | mom_s | arah_s).astype(int).rolling(lb, min_periods=1).max().astype(bool)
+    trend = pd.Series(np.where(mom_b, 1, np.where(mom_s, -1, np.nan)), index=c.index).ffill()
+    # RE : la tendance doit provenir d'un MOM dans les `lb` dernières bougies (pas d'ancien setup, CSAK exclu)
+    recent = (mom_b | mom_s).astype(int).rolling(lb, min_periods=1).max().astype(bool)
     trend = trend.where(recent)
     # Zones MA5/MA10
     zone_buy_hi, zone_buy_lo = np.maximum(l5, l10), np.minimum(l5, l10)
@@ -66,11 +66,14 @@ def detect(df, lb=15):
 
     sig = {"MOM": (mom_b, mom_s), "EXM": (exm_b, exm_s), "EXT": (ext_b, ext_s),
            "MHV": (mhv_b, mhv_s), "CSAK": (arah_b, arah_s), "RE": (re_b, re_s)}
+    # RE valide sur la dernière bougie, même si un signal prioritaire le masque à l'affichage
+    re_sens = "B" if bool(re_b.iloc[-1]) else ("S" if bool(re_s.iloc[-1]) else None)
+    res = (None, None)
     for code in PRIORITY:
         b, s = sig[code]
-        if b.iloc[-1]: return code, "B"
-        if s.iloc[-1]: return code, "S"
-    return None, None
+        if b.iloc[-1]: res = (code, "B"); break
+        if s.iloc[-1]: res = (code, "S"); break
+    return (res, re_sens) if with_re else res
 
 def mtf_code(cells):
     """cells: {tf: (signal, sens)} -> (code MTF, sens) ou (None, None)."""
@@ -147,16 +150,16 @@ def _scan_one(pair, tf):
     """((code, sens), ok) pour une paire sur un timeframe."""
     interval, period, rs = TFS[tf]
     df = _history(pair, interval, period)
-    if df is None: return (None, None), False
+    if df is None: return ((None, None), None), False
     if rs:
         df = df.resample(rs).agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
     # Exclure la dernière bougie en cours de formation (critique sur M5/M15)
     df = df.iloc[:-1]
-    if len(df) < 60: return (None, None), False
+    if len(df) < 60: return ((None, None), None), False
     try:
-        return detect(df), True
+        return detect(df, with_re=True), True
     except Exception:
-        return (None, None), False
+        return ((None, None), None), False
 
 def _d1_trend(pair):
     """Filtre D1 : 'B' si clôture D1 > EMA50, 'S' si <, None si données indisponibles."""
@@ -254,14 +257,16 @@ def live():
 
     body = []
     for p in pairs:
-        cells, tds = {}, []
+        cells, eff, tds = {}, {}, []
         for t in tfs:
-            code, d = res[(p, t)]
+            (code, d), re_d = res[(p, t)]
             cells[t] = (code, d)
             tds.append(cell_html(code, d))
+            # RE valide masqué par MHV/CSAK ou absent : pris en compte par synthese() et confiance
+            eff[t] = ("RE", re_d) if (re_d and code not in SIG_DIRECTEUR) else (code, d)
         # Entrée BBMA (synthèse multi-TF, filtre D1 inclus) puis Confiance
-        tf_e, code_e, sens_e = synthese(cells, tfs, use_filter, trends.get(p))
-        score = confiance_score(cells, tfs, sens_e) if sens_e else None
+        tf_e, code_e, sens_e = synthese(eff, tfs, use_filter, trends.get(p))
+        score = confiance_score(eff, tfs, sens_e) if sens_e else None
         tds.append(synth_cell(tf_e, code_e, sens_e))
         tds.append(conf_cell(score))
         body.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}</tr>')
