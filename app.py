@@ -127,33 +127,58 @@ if failed:
     st.warning(f"{failed}/{total} téléchargements sans données (limite yfinance, marché fermé ou symbole invalide). "
                "Clique sur Rafraîchir dans quelques instants.")
 
-rows = []
+import html
+
+CSS = """<style>
+.stApp{background:#131722}
+.bb-wrap{overflow-x:auto;background:#1e222d;border:1px solid #2a2e39;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.5);padding:6px}
+table.bb{border-collapse:separate;border-spacing:4px;width:100%;min-width:780px;font:13px/1.2 -apple-system,"Trebuchet MS",Roboto,sans-serif}
+table.bb th{color:#787b86;font-weight:600;padding:8px 10px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+table.bb th.pair{color:#d1d4dc;text-align:left;font-size:13px;letter-spacing:0}
+table.bb th.hmtf{color:#2962ff}
+table.bb td{padding:8px 10px;text-align:center;border-radius:8px;white-space:nowrap;transition:transform .12s,box-shadow .12s,filter .12s}
+table.bb td.none{color:#434651}
+table.bb td.buy{background:rgba(38,166,154,.16);color:#26a69a}
+table.bb td.sell{background:rgba(239,83,80,.16);color:#ef5350}
+table.bb td.strong{box-shadow:inset 3px 0 0 currentColor}
+table.bb td:not(.none):hover{transform:translateY(-1px);filter:brightness(1.3);box-shadow:0 4px 14px rgba(0,0,0,.55)}
+table.bb tr:hover th.pair{color:#fff}
+table.bb .tpw{margin-left:6px;padding:1px 5px;border-radius:4px;font-size:10px;background:#2962ff;color:#fff}
+table.bb td.mtf{font-weight:700;font-size:14px;min-width:90px}
+table.bb td.mtf.none{background:#2a2e39;color:#787b86}
+table.bb td.mtf.buy{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166,154,.55)}
+table.bb td.mtf.sell{background:#ef5350;color:#fff;box-shadow:0 0 14px rgba(239,83,80,.55)}
+</style>"""
+
+ARROW = {"B": "▲", "S": "▼"}
+
+NAMES = {"MOM": "Momentum", "EXM": "Extreme Magic (MA10)", "EXT": "Extreme (MA5)", "MHV": "Market Hilang Volume",
+         "CSAK": "Candle Arah Kukuh", "RE": "Reentry"}
+
+def cell_html(code, d):
+    if not code: return '<td class="none">–</td>'
+    strong = " strong" if code in ("MOM", "EXM", "EXT") else ""
+    tpw = '<span class="tpw">TPW</span>' if code in ("EXM", "EXT") else ""
+    tip = NAMES.get(code, code) + (" · Buy" if d == "B" else " · Sell")
+    return (f'<td class="{"buy" if d == "B" else "sell"}{strong}" title="{tip}">'
+            f'<b>{code}</b> {ARROW[d]}{tpw}</td>')
+
+body = []
 for p in pairs:
-    row, cells = {"Pair": p}, {}
+    cells, tds = {}, []
     for t in tfs:
         code, d = res[(p, t)]
         cells[t] = (code, d)
-        row[t] = "None" if not code else f"{code} {'▲' if d == 'B' else '▼'}" + (" TPW" if code in ("EXM", "EXT") else "")
+        tds.append(cell_html(code, d))
     m, d = mtf_code(cells)
     if m and use_filter:
         tr = trends.get(p)
         if tr and tr != d: m = None   # signal contre la tendance D1 (EMA50) -> ignoré
-    row["Code MTF"] = "-" if not m else f"{m} {'▲' if d == 'B' else '▼'}"
-    rows.append(row)
-df = pd.DataFrame(rows).set_index("Pair")
-
-def color(v):
-    if "▲" in str(v): return "color:#22c55e;font-weight:bold"
-    if "▼" in str(v): return "color:#ef4444;font-weight:bold"
-    return "color:#888"
-
-styler = df.style
-styler = styler.map(color) if hasattr(styler, "map") else styler.applymap(color)
-h = 38 * (len(df) + 1) + 3
-try:
-    st.dataframe(styler, width="stretch", height=h)
-except TypeError:   # anciennes versions de Streamlit
-    st.dataframe(styler, use_container_width=True, height=h)
+    mtf = (f'<td class="mtf {"buy" if d == "B" else "sell"}">{m} {ARROW[d]}</td>' if m
+           else '<td class="mtf none">–</td>')
+    body.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}{mtf}</tr>')
+head = ('<tr><th class="pair">Pair</th>' + "".join(f"<th>{t}</th>" for t in tfs) + '<th class="hmtf">Code MTF</th></tr>')
+st.markdown(CSS + f'<div class="bb-wrap"><table class="bb">{head}{"".join(body)}</table></div>', unsafe_allow_html=True)
 st.caption("▲ Buy · ▼ Sell · MOM=Momentum · EXM=Extreme Magic (MA10) · EXT=Extreme (MA5) · TPW=TP Wajib (avec EXM/EXT) · MHV · CSAK=Candle Arah · RE=Reentry. "
            "Code MTF : REM = D1 RE + H4 EXT + H1 MHV · RRE = RE + RE + EXT · REE = RE + EXT + EXT (même sens). "
-           "Filtre D1 : signal gardé seulement s'il suit la tendance D1 (clôture vs EMA50).")
+           "Survole une cellule pour voir le nom du signal. Filtre D1 : signal gardé seulement s'il suit la tendance D1 (clôture vs EMA50).")
