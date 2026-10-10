@@ -42,7 +42,7 @@ D1_FILTER_CLOSED_ONLY = True
 # Les bougies fermées sont conservées et s'accumulent d'un lancement à l'autre.
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
 # Période du premier téléchargement complet (= période maximale utilisée par TFS pour cet intervalle)
-CACHE_PERIOD = {"5m": "30d", "15m": "30d", "1h": "730d", "1d": "max", "1wk": "5y", "1mo": "10y"}
+CACHE_PERIOD = {"5m": "30d", "15m": "30d", "1h": "180d", "1d": "2y", "1wk": "5y", "1mo": "10y"}
 # Fenêtre de rattrapage pour une mise à jour incrémentale (au-delà : téléchargement complet)
 INCR_DAYS = {"5m": 5, "15m": 5, "1h": 10, "1d": 30}
 BAR_DELTA = {"5m": pd.Timedelta(minutes=5), "15m": pd.Timedelta(minutes=15), "1h": pd.Timedelta(hours=1),
@@ -60,8 +60,8 @@ def wma(s, n):
     return pd.Series(out, index=s.index)
 
 
-def signals(df, lb=15):
-    """Signaux sur toute la série : {code: (booléens buy, booléens sell)}. Causal, aucune fuite du futur.
+def detect(df, lb=15):
+    """Signal de la dernière bougie : (code, sens) avec sens 'B' (buy) ou 'S' (sell).
     Priorité : MOM > EXM (Extreme Magic, MA10) > EXT (MA5) > MHV > CSAK (Candle Arah) > RE.
     TP Wajib = flag déclenché par EXM/EXT uniquement (affiché à côté du code)."""
     o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
@@ -94,31 +94,13 @@ def signals(df, lb=15):
             & (c >= zone_sell_lo) & (c <= zone_sell_hi)
             & (h >= zone_sell_lo))
 
-    return {"MOM": (mom_b, mom_s), "EXM": (exm_b, exm_s), "EXT": (ext_b, ext_s),
-            "MHV": (mhv_b, mhv_s), "CSAK": (arah_b, arah_s), "RE": (re_b, re_s)}
-
-
-def detect(df, lb=15):
-    """Signal de la dernière bougie : (code, sens) avec sens 'B' (buy) ou 'S' (sell). Priorité inchangée."""
-    sig = signals(df, lb)
+    sig = {"MOM": (mom_b, mom_s), "EXM": (exm_b, exm_s), "EXT": (ext_b, ext_s),
+           "MHV": (mhv_b, mhv_s), "CSAK": (arah_b, arah_s), "RE": (re_b, re_s)}
     for code in PRIORITY:
         b, s = sig[code]
         if b.iloc[-1]: return code, "B"
         if s.iloc[-1]: return code, "S"
     return None, None
-
-
-def codes_series(df, lb=15):
-    """Code et sens de detect() pour chaque bougie de la série (même priorité)."""
-    sig = signals(df, lb)
-    code = pd.Series(None, index=df.index, dtype=object)
-    sens = pd.Series(None, index=df.index, dtype=object)
-    for c in reversed(PRIORITY):                 # le plus prioritaire écrit en dernier
-        b, s = sig[c]
-        hit = (b | s).to_numpy(dtype=bool)
-        code = code.where(~hit, c)
-        sens = sens.where(~hit, np.where(b.to_numpy(dtype=bool), "B", "S"))
-    return code.to_numpy(), sens.to_numpy()
 
 
 def synthese(cells, tf_dispo, use_filter, d1_trend):
