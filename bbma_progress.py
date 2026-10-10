@@ -106,7 +106,7 @@ def progress(pair, now=None):
 
 
 def entree(pr):
-    """Entrée finale : motif complet et non expiré, sinon None."""
+    """Entrée finale : motif complet et non expiré, sinon (None, None)."""
     if pr and pr["complete"] and not pr["expired"]:
         return pr["complete"], pr["sens"]
     return None, None
