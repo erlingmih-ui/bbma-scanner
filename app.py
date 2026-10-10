@@ -1,6 +1,6 @@
 """Interface Streamlit du scanner BBMA OA MTF.
 
-La logique métier (téléchargement, détection, synthèse, confiance) est dans ``bbma_core``.
+La logique métier (téléchargement, détection, synthèse, confiance, RSI) est dans ``bbma_core``.
 Ce module ne gère que l'affichage et les paramètres de la barre latérale.
 
 Lancement : streamlit run app.py
@@ -19,6 +19,7 @@ DEFAULT_PAIRS = "EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF NZDUSD EURJPY GBPJPY 
 MAX_PAIRS = 12
 CACHE_TTL = 240          # secondes ; inférieur à AUTO_REFRESH pour qu'un vrai scan ait lieu à chaque cycle
 AUTO_REFRESH = 300       # secondes entre deux scans automatiques
+RSI_LOW, RSI_HIGH = 30, 70   # repères visuels uniquement (couleur), aucun effet sur les signaux
 
 STRONG_CODES = {"MOM", "EXM", "EXT"}   # signaux affichés en gras (trait latéral)
 TPW_CODES = {"EXM", "EXT"}             # signaux pour lesquels le flag TP Wajib est affiché
@@ -39,6 +40,8 @@ LEGEND = (
     "Entrée BBMA : TF directeur (MOM/EXM/EXT/RE) + TF d'entrée plus bas (RE/MHV/CSAK/EXT) dans le même sens, "
     "annulé si un TF supérieur contredit ou si le sens va contre le filtre D1 (clôture vs EMA50). "
     "Confiance : part des TF scannés dans le même sens que l'entrée (vert ≥ 70% · bleu 40–69% · gris < 40%). "
+    "RSI 14 (Wilder) sous chaque cellule : vert < 30, rouge > 70, gris entre les deux ; "
+    "il est purement informatif et n'entre ni dans l'entrée BBMA ni dans la confiance. "
     "Les bougies non clôturées sont exclues du scan."
 )
 
@@ -57,6 +60,10 @@ table.bb td.strong{box-shadow:inset 3px 0 0 currentColor}
 table.bb td:not(.none):hover{transform:translateY(-1px);filter:brightness(1.3);box-shadow:0 4px 14px rgba(0,0,0,.55)}
 table.bb tr:hover th.pair{color:#fff}
 table.bb .tpw{margin-left:6px;padding:1px 5px;border-radius:4px;font-size:10px;background:#2962ff;color:#fff}
+/* RSI sous chaque cellule */
+table.bb .rsi{margin-top:3px;font-size:10px;font-weight:600;color:#787b86}
+table.bb .rsi.lo{color:#26a69a}
+table.bb .rsi.hi{color:#ef5350}
 /* Entrée BBMA (synthèse multi-TF) */
 table.bb td.synth{font-weight:700;font-size:13px;min-width:110px}
 table.bb td.synth.none{background:#2a2e39;color:#787b86}
@@ -67,66 +74,77 @@ table.bb td.conf{font-weight:700;font-size:14px;min-width:70px}
 table.bb td.conf.high{background:#26a69a;color:#fff}
 table.bb td.conf.mid{background:#2962ff;color:#fff}
 table.bb td.conf.low,table.bb td.conf.none{background:#2a2e39;color:#787b86}
+/* Colonne Pair figée à gauche sur téléphone */
+table.bb th.pair{position:sticky;left:0;z-index:2;width:84px;min-width:84px;background:#1e222d}
 </style>"""
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def run_scan(pairs: tuple, tfs: tuple):
-    """Scan complet, mis en cache. Retourne (res, trends, failed, total, timestamp UTC)."""
-    return core.scan(pairs, tfs, trend=True)
+    """Scan complet (signaux, tendances D1, RSI), mis en cache. Retourne (res, trends, failed, total, ts, rsi)."""
+    return core.scan_with_rsi(pairs, tfs, trend=True)
 
 
-def cell_html(code, direction) -> str:
-    """Cellule d'un signal pour un couple (paire, timeframe)."""
+def rsi_html(value) -> str:
+    """Valeur RSI sous la cellule : couleur uniquement pour les extrêmes."""
+    if value is None:
+        return '<div class="rsi">–</div>'
+    cls = "lo" if value < RSI_LOW else "hi" if value > RSI_HIGH else ""
+    return f'<div class="rsi {cls}">{round(value)}</div>'
+
+
+def cell_html(code, direction, rsi_value) -> str:
+    """Cellule d'un signal pour un couple (paire, timeframe), avec le RSI du même TF en dessous."""
+    sub = rsi_html(rsi_value)
+    rsi_tip = "" if rsi_value is None else f" · RSI {round(rsi_value)}"
     if not code:
-        return '<td class="none">–</td>'
+        return f'<td class="none" title="Aucun signal{rsi_tip}"><div>–</div>{sub}</td>'
     cls = "buy" if direction == "B" else "sell"
     strong = " strong" if code in STRONG_CODES else ""
     tpw = '<span class="tpw">TPW</span>' if code in TPW_CODES else ""
     side = "Buy" if direction == "B" else "Sell"
-    tip = f"{NAMES.get(code, code)} · {side}"
-    return f'<td class="{cls}{strong}" title="{tip}"><b>{code}</b> {ARROW[direction]}{tpw}</td>'
+    tip = f"{NAMES.get(code, code)} · {side}{rsi_tip}"
+    return (f'<td class="{cls}{strong}" title="{tip}">'
+            f'<div><b>{code}</b> {ARROW[direction]}{tpw}</div>{sub}</td>')
 
 
 def synth_cell(tf, code, direction) -> str:
     """Cellule « Entrée BBMA » : timeframe d'entrée, signal et sens."""
     if not tf:
-        return '<td class="synth none">–</td>'
+        return '<td class="synth s1 none">–</td>'
     cls = "buy" if direction == "B" else "sell"
     side = "Buy" if direction == "B" else "Sell"
     tip = f"Entrée {tf} · {NAMES.get(code, code)} · {side}"
-    return f'<td class="synth {cls}" title="{tip}"><b>{tf}</b> {code} {ARROW[direction]}</td>'
+    return f'<td class="synth s1 {cls}" title="{tip}"><b>{tf}</b> {code} {ARROW[direction]}</td>'
 
 
 def conf_cell(score) -> str:
     """Cellule « Confiance » : pourcentage coloré (vert ≥ 70 %, bleu 40–69 %, gris < 40 %)."""
     if score is None:
-        return '<td class="conf none">–</td>'
+        return '<td class="conf s2 none">–</td>'
     pct = round(score * 100)
     cls = "high" if pct >= 70 else "mid" if pct >= 40 else "low"
-    return f'<td class="conf {cls}">{pct}%</td>'
+    return f'<td class="conf s2 {cls}">{pct}%</td>'
 
 
-def build_table(pairs, tfs, res, trends, use_filter) -> str:
-    """Construit le HTML complet du tableau de bord."""
+def build_table(pairs, tfs, res, trends, rsi_vals, use_filter) -> str:
+    """Construit le HTML du tableau unique : Pair, puis les timeframes, puis Entrée BBMA et Confiance."""
     rows = []
     for p in pairs:
-        cells, tds = {}, []
+        cells, tf_tds = {}, []
         for t in tfs:
             code, direction = res[(p, t)]
             cells[t] = (code, direction)
-            tds.append(cell_html(code, direction))
+            tf_tds.append(cell_html(code, direction, rsi_vals.get((p, t))))
+        # Entrée BBMA (synthèse multi-TF, filtre D1 inclus) puis Confiance
         tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, trends.get(p))
         score = core.confiance_score(cells, tfs, sens_e) if sens_e else None
-        tds.append(synth_cell(tf_e, code_e, sens_e))
-        tds.append(conf_cell(score))
+        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e), conf_cell(score)]
         rows.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}</tr>')
 
-    head = (
-        '<tr><th class="pair">Pair</th>'
-        + "".join(f"<th>{t}</th>" for t in tfs)
-        + '<th class="hmtf">Entrée BBMA</th><th class="hmtf">Confiance</th></tr>'
-    )
+    head = ('<tr><th class="pair">Pair</th>'
+            + "".join(f"<th>{t}</th>" for t in tfs)
+            + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th></tr>')
     return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
 
 
@@ -158,7 +176,7 @@ def main():
     @st.fragment(run_every=AUTO_REFRESH if auto else None)   # ne relance que cette partie
     def live():
         with st.spinner("Scan en cours..."):
-            res, trends, failed, total, ts = run_scan(tuple(pairs), tuple(tfs))
+            res, trends, failed, total, ts, rsi_vals = run_scan(tuple(pairs), tuple(tfs))
 
         if failed:
             st.warning(
@@ -166,7 +184,7 @@ def main():
                 "Clique sur Rafraîchir dans quelques instants."
             )
 
-        st.markdown(CSS + build_table(pairs, tfs, res, trends, use_filter), unsafe_allow_html=True)
+        st.markdown(CSS + build_table(pairs, tfs, res, trends, rsi_vals, use_filter), unsafe_allow_html=True)
         st.caption(LEGEND)
         suffix = " · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"
         st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC{suffix}")

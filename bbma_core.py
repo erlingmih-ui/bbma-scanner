@@ -148,6 +148,26 @@ def confiance_score(cells, tfs, sens_ref):
     return n / len(tfs)
 
 
+RSI_PERIOD = 14
+
+
+def _wilder(x, n):
+    """Lissage de Wilder : moyenne simple des n premières valeurs, puis récurrence avec alpha = 1/n."""
+    x = x.copy()
+    seed = x.iloc[1:n + 1].mean()
+    x.iloc[: n] = np.nan                 # valeurs avant la graine : non calculées
+    x.iloc[n] = seed
+    return x.ewm(alpha=1 / n, adjust=False).mean()
+
+
+def rsi(close, n=RSI_PERIOD):
+    """RSI de Wilder (indépendant de la logique BBMA). Premier RSI disponible à la bougie n."""
+    delta = close.diff()
+    avg_gain = _wilder(delta.clip(lower=0), n)
+    avg_loss = _wilder(-delta.clip(upper=0), n)
+    return 100 - 100 / (1 + avg_gain / avg_loss)
+
+
 def _history(pair, interval, period):
     """Télécharge les bougies avec réessais espacés. Retourne un DataFrame OHLC ou None."""
     for attempt in range(RETRY):
@@ -255,22 +275,39 @@ def _fetch_all(pairs, tfs, trend):
         return dict(zip(keys, ex.map(lambda k: _history_cached(*k), keys)))
 
 
-def _scan_one(pair, tf, data):
-    """((code, sens), ok) pour une paire sur un timeframe, à partir des données déjà téléchargées."""
+def _closed_bars(pair, tf, data):
+    """Bougies fermées d'une paire sur un timeframe (resampling, bougie en formation exclue), ou None."""
     interval, period, rs = TFS[tf]
     df = data.get((pair, interval, period))
     if df is None:
-        return (None, None), False
+        return None
     if rs:
         df = df.resample(rs).agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
     # Exclure la dernière bougie en cours de formation (critique sur M5/M15)
     df = df.iloc[:-1]
     if len(df) < MIN_BARS:
+        return None
+    return df
+
+
+def _scan_one(pair, tf, data):
+    """((code, sens), ok) pour une paire sur un timeframe, à partir des données déjà téléchargées."""
+    df = _closed_bars(pair, tf, data)
+    if df is None:
         return (None, None), False
     try:
         return detect(df), True
     except Exception:
         return (None, None), False
+
+
+def _rsi_one(pair, tf, data):
+    """RSI 14 de la dernière bougie fermée, ou None si indisponible."""
+    df = _closed_bars(pair, tf, data)
+    if df is None:
+        return None
+    value = rsi(df["Close"]).iloc[-1]
+    return None if pd.isna(value) else float(value)
 
 
 def _d1_trend(pair, data):
@@ -299,3 +336,19 @@ def scan(pairs, tfs, trend=True):
         failed += not ok
     trends = {p: _d1_trend(p, data) for p in pairs} if trend else {}
     return res, trends, failed, len(jobs), datetime.now(timezone.utc)
+
+
+def scan_with_rsi(pairs, tfs, trend=True):
+    """Comme scan(), avec en plus le RSI de chaque couple (paire, TF) : un seul passage de téléchargement.
+    Retourne (res, trends, failed, total, ts, rsi). rsi : {(paire, tf): float ou None}."""
+    pairs, tfs = list(pairs), list(tfs)
+    data = _fetch_all(pairs, tfs, trend)
+    jobs = [(p, t) for p in pairs for t in tfs]
+    res, failed = {}, 0
+    for p, t in jobs:
+        r, ok = _scan_one(p, t, data)
+        res[(p, t)] = r
+        failed += not ok
+    trends = {p: _d1_trend(p, data) for p in pairs} if trend else {}
+    rsi_values = {(p, t): _rsi_one(p, t, data) for p, t in jobs}
+    return res, trends, failed, len(jobs), datetime.now(timezone.utc), rsi_values
