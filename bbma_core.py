@@ -1,8 +1,11 @@
 """Logique pure du scanner BBMA : données, détection, synthèse. Aucune dépendance à Streamlit."""
 import logging
+import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -34,6 +37,18 @@ DL_WORKERS = 6
 # Correction 2 : le filtre D1 utilise la dernière bougie D1 CLÔTURÉE, comme le signal.
 # Mettre False pour retrouver le comportement d'origine (bougie en formation incluse).
 D1_FILTER_CLOSED_ONLY = True
+
+# Cache disque des bougies : un fichier Parquet par (paire, intervalle), dans ./cache à côté de ce module.
+# Les bougies fermées sont conservées et s'accumulent d'un lancement à l'autre.
+CACHE_DIR = Path(__file__).resolve().parent / "cache"
+# Période du premier téléchargement complet (= période maximale utilisée par TFS pour cet intervalle)
+CACHE_PERIOD = {"5m": "30d", "15m": "30d", "1h": "180d", "1d": "2y", "1wk": "5y", "1mo": "10y"}
+# Fenêtre de rattrapage pour une mise à jour incrémentale (au-delà : téléchargement complet)
+INCR_DAYS = {"5m": 5, "15m": 5, "1h": 10, "1d": 30}
+BAR_DELTA = {"5m": pd.Timedelta(minutes=5), "15m": pd.Timedelta(minutes=15), "1h": pd.Timedelta(hours=1),
+             "1d": pd.Timedelta(days=1), "1wk": pd.Timedelta(weeks=1)}
+_file_locks = {}
+_locks_guard = threading.Lock()
 
 
 def wma(s, n):
@@ -149,6 +164,86 @@ def _history(pair, interval, period):
     return None
 
 
+def _lock_for(path):
+    """Un verrou par fichier de cache : évite deux écritures simultanées (threads H1 et H4 par exemple)."""
+    with _locks_guard:
+        return _file_locks.setdefault(path, threading.Lock())
+
+
+def _cache_path(pair, interval):
+    safe = re.sub(r"[^A-Za-z0-9]", "_", pair)   # empêche les chemins hors du dossier cache
+    return CACHE_DIR / f"{safe}_{interval}.parquet"
+
+
+def _utc_index(df):
+    """Index temporel en UTC (tz-aware), pour pouvoir comparer avec l'heure courante."""
+    idx = df.index
+    df.index = idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+    return df
+
+
+def _bar_end(ts, interval):
+    """Instant de fermeture d'une bougie ouverte à ts."""
+    if interval == "1mo":
+        return ts + pd.DateOffset(months=1)
+    return ts + BAR_DELTA[interval]
+
+
+def _read_cache(path):
+    if not path.exists():
+        return None
+    try:
+        return _utc_index(pd.read_parquet(path))
+    except Exception as e:
+        log.warning("cache illisible, retéléchargement (%s) : %s", path.name, e)
+        return None
+
+
+def _write_cache(path, df):
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        df.to_parquet(tmp)
+        tmp.replace(path)                       # écriture atomique : pas de fichier à moitié écrit
+    except Exception as e:
+        log.warning("écriture du cache impossible (%s) : %s", path.name, e)
+
+
+def _history_cached(pair, interval, period):
+    """Historique OHLC avec cache disque.
+
+    - Cache à jour (la dernière bougie stockée est encore en formation) : aucun téléchargement.
+    - Cache périmé : téléchargement incrémental, ou complet si le cache est trop ancien.
+    - Premier lancement : téléchargement complet de CACHE_PERIOD.
+    - Échec réseau : on renvoie le cache existant plutôt que rien.
+    `period` est ignoré : la période réellement stockée est CACHE_PERIOD[interval] (maximum utilisé)."""
+    path = _cache_path(pair, interval)
+    with _lock_for(path):
+        cached = _read_cache(path)
+        now = pd.Timestamp.now(tz="UTC")
+
+        if cached is not None:
+            last = cached.index[-1]
+            if now < _bar_end(last, interval):
+                return cached                   # dernière bougie encore ouverte : rien de nouveau à fermer
+            gap = now - last
+            if interval in INCR_DAYS and gap < pd.Timedelta(days=INCR_DAYS[interval]):
+                fetch_period = f"{INCR_DAYS[interval]}d"
+            else:
+                fetch_period = CACHE_PERIOD[interval]
+        else:
+            fetch_period = CACHE_PERIOD[interval]
+
+        new = _history(pair, interval, fetch_period)
+        if new is None:
+            return cached
+        new = _utc_index(new)
+        merged = new if cached is None else pd.concat([cached, new])
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        _write_cache(path, merged)
+        return merged
+
+
 def _fetch_all(pairs, tfs, trend):
     """Un seul téléchargement par (paire, intervalle, période).
     Le D1 du filtre de tendance est le même téléchargement que le TF D1 : il n'est pas refait."""
@@ -157,7 +252,7 @@ def _fetch_all(pairs, tfs, trend):
         keys |= {(p, "1d", "2y") for p in pairs}
     keys = list(keys)
     with ThreadPoolExecutor(DL_WORKERS) as ex:
-        return dict(zip(keys, ex.map(lambda k: _history(*k), keys)))
+        return dict(zip(keys, ex.map(lambda k: _history_cached(*k), keys)))
 
 
 def _scan_one(pair, tf, data):
