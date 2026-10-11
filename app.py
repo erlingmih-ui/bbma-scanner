@@ -1,6 +1,7 @@
 """Interface Streamlit du scanner BBMA OA MTF.
 
 La logique métier (téléchargement, détection, synthèse, confiance, RSI) est dans ``bbma_core``.
+La colonne Qualité est calculée par ``bbma_quality`` ; ses poids et seuils sont dans ``bbma_quality_codes``.
 Ce module ne gère que l'affichage et les paramètres de la barre latérale.
 
 Lancement : streamlit run app.py
@@ -11,6 +12,8 @@ import logging
 import streamlit as st
 
 import bbma_core as core
+import bbma_quality as bq
+from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
 
@@ -44,11 +47,17 @@ LEGEND = (
     "il est purement informatif et n'entre ni dans l'entrée BBMA ni dans la confiance. "
     "Les bougies non clôturées sont exclues du scan."
 )
+QUAL_LEGEND = (
+    f" Qualité (A ≥ {GRADE_MIN['A']} · B {GRADE_MIN['B']}–{GRADE_MIN['A'] - 1} · C < {GRADE_MIN['B']}) : "
+    f"score /100 = confluence ({MAX_CONFLUENCE}) + code d'entrée ({MAX_SIGNAL}) + RSI à contre-sens ({MAX_RSI}) "
+    f"+ anti-poursuite, distance à la MID BB en ATR ({MAX_CHASE}) + accord D1 ({MAX_D1}). "
+    "Survole la cellule pour le détail."
+)
 
 CSS = """<style>
 .stApp{background:#131722}
 .bb-wrap{overflow-x:auto;background:#1e222d;border:1px solid #2a2e39;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.5);padding:6px}
-table.bb{border-collapse:separate;border-spacing:4px;width:100%;min-width:780px;font:13px/1.2 -apple-system,"Trebuchet MS",Roboto,sans-serif}
+table.bb{border-collapse:separate;border-spacing:4px;width:100%;min-width:900px;font:13px/1.2 -apple-system,"Trebuchet MS",Roboto,sans-serif}
 table.bb th{color:#787b86;font-weight:600;padding:8px 10px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 table.bb th.pair{color:#d1d4dc;text-align:left;font-size:13px;letter-spacing:0}
 table.bb th.hmtf{color:#2962ff}
@@ -74,6 +83,12 @@ table.bb td.conf{font-weight:700;font-size:14px;min-width:70px}
 table.bb td.conf.high{background:#26a69a;color:#fff}
 table.bb td.conf.mid{background:#2962ff;color:#fff}
 table.bb td.conf.low,table.bb td.conf.none{background:#2a2e39;color:#787b86}
+/* Qualité de l'entrée (dernière colonne) */
+table.bb td.qual{font-weight:700;font-size:14px;min-width:80px}
+table.bb td.qual.A{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166,154,.55)}
+table.bb td.qual.B{background:#2962ff;color:#fff}
+table.bb td.qual.C,table.bb td.qual.none{background:#2a2e39;color:#787b86}
+table.bb td.qual .qs{font-weight:500;font-size:11px;opacity:.9}
 /* Colonne Pair figée à gauche sur téléphone */
 table.bb th.pair{position:sticky;left:0;z-index:2;width:84px;min-width:84px;background:#1e222d}
 </style>"""
@@ -81,8 +96,9 @@ table.bb th.pair{position:sticky;left:0;z-index:2;width:84px;min-width:84px;back
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def run_scan(pairs: tuple, tfs: tuple):
-    """Scan complet (signaux, tendances D1, RSI), mis en cache. Retourne (res, trends, failed, total, ts, rsi)."""
-    return core.scan_with_rsi(pairs, tfs, trend=True)
+    """Scan complet (signaux, tendances D1, RSI, ATR), mis en cache.
+    Retourne (res, trends, failed, total, ts, feats) ; feats contient le RSI et la distance ATR par (paire, TF)."""
+    return bq.scan_quality(pairs, tfs, trend=True)
 
 
 def rsi_html(value) -> str:
@@ -127,24 +143,29 @@ def conf_cell(score) -> str:
     return f'<td class="conf s2 {cls}">{pct}%</td>'
 
 
-def build_table(pairs, tfs, res, trends, rsi_vals, use_filter) -> str:
-    """Construit le HTML du tableau unique : Pair, puis les timeframes, puis Entrée BBMA et Confiance."""
+def build_table(pairs, tfs, res, trends, feats, use_filter) -> str:
+    """Tableau unique : Pair, timeframes, Entrée BBMA, Confiance, Qualité (dernière colonne)."""
     rows = []
     for p in pairs:
         cells, tf_tds = {}, []
         for t in tfs:
             code, direction = res[(p, t)]
             cells[t] = (code, direction)
-            tf_tds.append(cell_html(code, direction, rsi_vals.get((p, t))))
-        # Entrée BBMA (synthèse multi-TF, filtre D1 inclus) puis Confiance
+            rsi_v = (feats.get((p, t)) or {}).get("rsi")
+            tf_tds.append(cell_html(code, direction, rsi_v))
+        # Entrée BBMA (synthèse multi-TF, filtre D1 inclus), puis Confiance, puis Qualité
         tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, trends.get(p))
         score = core.confiance_score(cells, tfs, sens_e) if sens_e else None
-        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e), conf_cell(score)]
+        q_score, q_grade, q_detail = bq.qualite_entree(
+            code_e, sens_e, score, trends.get(p), feats.get((p, tf_e)))
+        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e), conf_cell(score),
+                        bq.qual_cell(q_score, q_grade, q_detail)]
         rows.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}</tr>')
 
     head = ('<tr><th class="pair">Pair</th>'
             + "".join(f"<th>{t}</th>" for t in tfs)
-            + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th></tr>')
+            + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th>'
+            + '<th class="s3 hmtf">Qualité</th></tr>')
     return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
 
 
@@ -176,7 +197,7 @@ def main():
     @st.fragment(run_every=AUTO_REFRESH if auto else None)   # ne relance que cette partie
     def live():
         with st.spinner("Scan en cours..."):
-            res, trends, failed, total, ts, rsi_vals = run_scan(tuple(pairs), tuple(tfs))
+            res, trends, failed, total, ts, feats = run_scan(tuple(pairs), tuple(tfs))
 
         if failed:
             st.warning(
@@ -184,8 +205,8 @@ def main():
                 "Clique sur Rafraîchir dans quelques instants."
             )
 
-        st.markdown(CSS + build_table(pairs, tfs, res, trends, rsi_vals, use_filter), unsafe_allow_html=True)
-        st.caption(LEGEND)
+        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter), unsafe_allow_html=True)
+        st.caption(LEGEND + QUAL_LEGEND)
         suffix = " · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"
         st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC{suffix}")
 
