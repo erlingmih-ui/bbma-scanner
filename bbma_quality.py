@@ -1,0 +1,113 @@
+"""Colonne « Qualité » de l'entrée BBMA.
+
+Module ajouté au moteur existant : bbma_core.py n'est pas modifié. Les fonctions de
+téléchargement, de détection et de synthèse sont réutilisées ; les poids, seuils et
+libellés viennent de bbma_quality_codes.py.
+"""
+import html
+from datetime import datetime, timezone
+
+import pandas as pd
+
+import bbma_core as core
+from bbma_quality_codes import (
+    ATR_PERIOD, CHASE_BELOW, CHASE_MISSING, CHASE_STEPS, CODE_WEIGHT,
+    D1_AGREE, D1_DISAGREE, D1_UNKNOWN, GRADE_MIN, MAX_CONFLUENCE, MID_PERIOD,
+    QUAL_LABELS, RSI_MISSING, RSI_POINTS, RSI_ZONE_OVERBOUGHT, RSI_ZONE_PULLBACK,
+)
+
+
+def atr(df, n=ATR_PERIOD):
+    """Average True Range (moyenne simple sur n bougies)."""
+    prev = df["Close"].shift(1)
+    tr = pd.concat([df["High"] - df["Low"],
+                    (df["High"] - prev).abs(),
+                    (df["Low"] - prev).abs()], axis=1).max(axis=1)
+    return tr.rolling(n).mean()
+
+
+def features_one(pair, tf, data):
+    """RSI et distance signée close -> MID BB en ATR, sur la dernière bougie fermée. None si indisponible."""
+    df = core._closed_bars(pair, tf, data)
+    if df is None:
+        return None
+    c = df["Close"]
+    mid = c.rolling(MID_PERIOD).mean().iloc[-1]
+    a = atr(df).iloc[-1]
+    r = core.rsi(c).iloc[-1]
+    dist = None if pd.isna(a) or a <= 0 or pd.isna(mid) else float((c.iloc[-1] - mid) / a)
+    return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist}
+
+
+def scan_quality(pairs, tfs, trend=True):
+    """Scan identique à core.scan_with_rsi, plus les caractéristiques par (paire, TF).
+    Retourne (res, trends, failed, total, ts, feats)."""
+    pairs, tfs = list(pairs), list(tfs)
+    data = core._fetch_all(pairs, tfs, trend)
+    jobs = [(p, t) for p in pairs for t in tfs]
+    res, failed = {}, 0
+    for p, t in jobs:
+        r, ok = core._scan_one(p, t, data)
+        res[(p, t)] = r
+        failed += not ok
+    trends = {p: core._d1_trend(p, data) for p in pairs} if trend else {}
+    feats = {(p, t): features_one(p, t, data) for p, t in jobs}
+    return res, trends, failed, len(jobs), datetime.now(timezone.utc), feats
+
+
+def qualite_entree(code, sens, conf, d1, feat):
+    """Score de qualité (0-100), grade A/B/C et détail par critère.
+    Retourne (None, None, None) s'il n'y a pas d'entrée."""
+    if not code or not sens:
+        return None, None, None
+    sign = 1 if sens == "B" else -1
+    feat = feat or {}
+    detail = {
+        "confluence": round(MAX_CONFLUENCE * (conf or 0)),
+        "signal": CODE_WEIGHT.get(code, 0),
+    }
+
+    # RSI : r_dir = RSI du point de vue du trade (élevé = favorable au sens)
+    r = feat.get("rsi")
+    if r is None:
+        detail["rsi"] = RSI_MISSING
+    else:
+        r_dir = r if sign == 1 else 100 - r
+        if r_dir > RSI_ZONE_OVERBOUGHT:
+            detail["rsi"] = RSI_POINTS["overbought"]
+        elif r_dir < RSI_ZONE_PULLBACK:
+            detail["rsi"] = RSI_POINTS["pullback"]
+        else:
+            detail["rsi"] = RSI_POINTS["neutral"]
+
+    # Anti-poursuite : ds > 0 = prix étendu dans le sens du trade
+    d = feat.get("dist_atr")
+    if d is None:
+        detail["chase"] = CHASE_MISSING
+    else:
+        ds = d * sign
+        if ds < 0:
+            detail["chase"] = CHASE_BELOW
+        else:
+            detail["chase"] = next((pts for seuil, pts in CHASE_STEPS if ds <= seuil), 0)
+
+    # Filtre D1
+    if d1 == sens:
+        detail["d1"] = D1_AGREE
+    elif d1 is None:
+        detail["d1"] = D1_UNKNOWN
+    else:
+        detail["d1"] = D1_DISAGREE
+
+    score = sum(detail.values())
+    grade = "A" if score >= GRADE_MIN["A"] else "B" if score >= GRADE_MIN["B"] else "C"
+    return score, grade, detail
+
+
+def qual_cell(score, grade, detail) -> str:
+    """Cellule « Qualité » : grade et score /100, détail au survol."""
+    if score is None:
+        return '<td class="qual s3 none">–</td>'
+    parts = " · ".join(f"{QUAL_LABELS[k]} {v}" for k, v in detail.items())
+    tip = html.escape(f"Qualité {score}/100 · {parts}")
+    return f'<td class="qual s3 {grade}" title="{tip}"><b>{grade}</b> <span class="qs">{score}</span></td>'
