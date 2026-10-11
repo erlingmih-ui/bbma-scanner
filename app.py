@@ -37,26 +37,64 @@ NAMES = {
     "CSAK": "Candle Arah Kukuh",
     "RE": "Reentry",
 }
-LEGEND = (
-    "▲ Buy · ▼ Sell · MOM=Momentum · EXM=Extreme Magic (MA10) · EXT=Extreme (MA5) · "
-    "TPW=TP Wajib (avec EXM/EXT) · MHV · CSAK=Candle Arah · "
-    "RE=Reentry (strict : retour depuis l'extérieur de la zone MA5/MA10). "
-    "Survole une cellule pour voir le nom du signal. "
-    "Entrée BBMA : TF directeur (MOM/EXM/EXT/RE) + TF d'entrée plus bas (RE/MHV/CSAK/EXT) dans le même sens, "
-    "annulé si un TF supérieur contredit ou si le sens va contre le filtre D1 (clôture vs EMA50). "
-    "Confiance : part des TF scannés dans le même sens que l'entrée (vert ≥ 70% · bleu 40–69% · gris < 40%). "
-    "RSI 14 (Wilder) sous chaque cellule : vert < 30, rouge > 70, gris entre les deux ; "
-    "il est purement informatif et n'entre ni dans l'entrée BBMA ni dans la confiance. "
-    "Jauge : équilibre Buy/Sell de -100 (vente forte) à +100 (achat fort), pondéré par timeframe, "
-    "force du signal et tendance D1 ; le curseur se place sur la barre, le détail est au survol. "
-    "Les bougies non clôturées sont exclues du scan."
-)
-QUAL_LEGEND = (
-    f" Qualité (A ≥ {GRADE_MIN['A']} · B {GRADE_MIN['B']}–{GRADE_MIN['A'] - 1} · C < {GRADE_MIN['B']}) : "
-    f"score /100 = confluence ({MAX_CONFLUENCE}) + code d'entrée ({MAX_SIGNAL}) + RSI à contre-sens ({MAX_RSI}) "
-    f"+ anti-poursuite, distance à la MID BB en ATR ({MAX_CHASE}) + accord D1 ({MAX_D1}). "
-    "Survole la cellule pour le détail."
-)
+LEGEND_CSS = """
+.bb-legend{margin-top:14px;background:#1e222d;border:1px solid #2a2e39;border-radius:14px;padding:14px 16px;font:13px/1.5 -apple-system,"Trebuchet MS",Roboto,sans-serif;color:#b2b5be}
+.bb-legend h4{margin:14px 0 6px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#787b86}
+.bb-legend h4:first-child{margin-top:0}
+.bb-legend b{color:#d1d4dc}
+.bb-legend .chips{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0}
+.bb-legend .chip{padding:3px 9px;border-radius:6px;font-weight:700;font-size:12px}
+.bb-legend .chip.buy{background:rgba(38,166,154,.18);color:#26a69a}
+.bb-legend .chip.sell{background:rgba(239,83,80,.18);color:#ef5350}
+.bb-legend .chip.mid{background:#2962ff;color:#fff}
+.bb-legend .chip.low{background:#2a2e39;color:#787b86}
+.bb-legend .chip.qa{background:#26a69a;color:#fff}
+.bb-legend .chip.qb{background:#2962ff;color:#fff}
+.bb-legend .chip.tp{background:#2962ff;color:#fff}
+.bb-legend .sigs{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:3px 14px}
+.bb-legend .grad{height:8px;border-radius:4px;margin:6px 0 4px;background:linear-gradient(90deg,#ef5350,#2a2e39 50%,#26a69a)}
+.bb-legend .scale{display:flex;justify-content:space-between;font-size:11px;color:#787b86}
+.bb-legend .note{color:#787b86;font-size:12px;margin-top:4px}
+"""
+
+
+def legend_html() -> str:
+    """Légende organisée par sections, avec les mêmes couleurs que le tableau."""
+    sigs = [("MOM", "Momentum"), ("EXM", "Extreme Magic (MA10)"), ("EXT", "Extreme (MA5)"),
+            ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh"), ("RE", "Reentry (strict)")]
+    sigs_html = "".join(f"<div><b>{code}</b> · {name}</div>" for code, name in sigs)
+    return (
+        '<div class="bb-legend">'
+        '<h4>Direction</h4>'
+        '<div class="chips"><span class="chip buy">▲ Buy</span><span class="chip sell">▼ Sell</span>'
+        '<span class="chip tp">TPW = TP Wajib (avec EXM / EXT)</span></div>'
+        '<h4>Signaux</h4><div class="sigs">' + sigs_html + '</div>'
+        '<h4>Entrée BBMA</h4>'
+        '<div>TF directeur (MOM / EXM / EXT / RE) + TF d’entrée plus bas (RE / MHV / CSAK / EXT) dans le même sens. '
+        'Annulé si un TF supérieur contredit, ou si le sens va contre le filtre D1 (clôture vs EMA50).</div>'
+        '<h4>Confiance</h4>'
+        '<div class="chips"><span class="chip buy">≥ 70 %</span><span class="chip mid">40 – 69 %</span>'
+        '<span class="chip low">&lt; 40 %</span></div>'
+        '<div class="note">Part des TF scannés dans le même sens que l’entrée.</div>'
+        '<h4>RSI 14 sous chaque cellule</h4>'
+        '<div class="chips"><span class="chip buy">&lt; 30</span><span class="chip sell">&gt; 70</span>'
+        '<span class="chip low">entre les deux</span></div>'
+        '<div class="note">Informatif : n’entre ni dans l’entrée BBMA ni dans la confiance.</div>'
+        '<h4>Jauge Buy / Sell</h4>'
+        '<div class="grad"></div>'
+        '<div class="scale"><span>−100 vente forte</span><span>0</span><span>+100 achat fort</span></div>'
+        '<div class="note">Pondérée par timeframe, force du signal et tendance D1. Détail au survol.</div>'
+        '<h4>Qualité de l’entrée</h4>'
+        f'<div class="chips"><span class="chip qa">A ≥ {GRADE_MIN["A"]}</span>'
+        f'<span class="chip qb">B {GRADE_MIN["B"]} – {GRADE_MIN["A"] - 1}</span>'
+        f'<span class="chip low">C &lt; {GRADE_MIN["B"]}</span></div>'
+        f'<div>Score /100 : confluence ({MAX_CONFLUENCE}) · code d’entrée ({MAX_SIGNAL}) · '
+        f'RSI à contre-sens ({MAX_RSI}) · anti-poursuite, distance à la MID BB en ATR ({MAX_CHASE}) · '
+        f'accord D1 ({MAX_D1}). Détail au survol.</div>'
+        '<div class="note">Les bougies non clôturées sont exclues du scan.</div>'
+        '</div>'
+    )
+
 
 CSS = """<style>
 .stApp{background:#131722}
@@ -104,7 +142,7 @@ table.bb td.qual.C,table.bb td.qual.none{background:#2a2e39;color:#787b86}
 table.bb td.qual .qs{font-weight:500;font-size:11px;opacity:.9}
 /* Colonne Pair figée à gauche sur téléphone */
 table.bb th.pair{position:sticky;left:0;z-index:2;width:84px;min-width:84px;background:#1e222d}
-</style>"""
+""" + LEGEND_CSS + """</style>"""
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -220,7 +258,7 @@ def main():
             )
 
         st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter), unsafe_allow_html=True)
-        st.caption(LEGEND + QUAL_LEGEND)
+        st.markdown(legend_html(), unsafe_allow_html=True)
         suffix = " · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"
         st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC{suffix}")
 
