@@ -14,6 +14,7 @@ import streamlit as st
 
 import bbma_core as core
 import bbma_fresh as bf
+import bbma_session as bs
 import bbma_gauge as bg
 import bbma_quality as bq
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
@@ -75,6 +76,8 @@ def legend_html() -> str:
         '<span class="chip sell">● périmé</span></div>'
         '<div class="note">Pastille à côté de chaque paire : âge de la dernière bougie fermée, le pire timeframe compte. Détail au survol.</div>'
         '<h4>Entrée BBMA</h4>'
+        '<div class="chips"><span class="chip buy">pullback</span><span class="chip mid">poursuite</span></div>'
+        '<div class="note">Pullback : retour vers la zone MA, avec un signal d’entrée sur un TF inférieur. Poursuite : le TF directeur sert d’entrée, prix déjà étendu, grade plafonné à B. H4 ancré sur : ' + bs.H4_SESSION + '.</div>'
         '<div>TF directeur (MOM / EXM / EXT / RE) + TF d’entrée plus bas (RE / MHV / CSAK / EXT) dans le même sens. '
         'Annulé si un TF supérieur contredit, ou si le sens va contre le filtre D1 (clôture vs EMA50).</div>'
         '<h4>Confiance</h4>'
@@ -125,6 +128,8 @@ table.bb td.synth{font-weight:700;font-size:13px;min-width:110px}
 table.bb td.synth.none{background:#2a2e39;color:#787b86}
 table.bb td.synth.buy{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166,154,.55)}
 table.bb td.synth.sell{background:#ef5350;color:#fff;box-shadow:0 0 14px rgba(239,83,80,.55)}
+table.bb td.synth.chase{background:#BA7517;color:#fff;box-shadow:none}
+table.bb td.synth .kind{font-size:10px;font-weight:500;margin-top:2px;opacity:.9}
 /* Confiance (part des TF en confluence) */
 table.bb td.conf{font-weight:700;font-size:14px;min-width:70px}
 table.bb td.conf.high{background:#26a69a;color:#fff}
@@ -181,14 +186,20 @@ def cell_html(code, direction, rsi_value) -> str:
             f'<div><b>{code}</b> {ARROW[direction]}{tpw}</div>{sub}</td>')
 
 
-def synth_cell(tf, code, direction) -> str:
-    """Cellule « Entrée BBMA » : timeframe d'entrée, signal et sens."""
+def synth_cell(tf, code, direction, kind=None) -> str:
+    """Cellule « Entrée BBMA » : timeframe, signal, sens et nature de l'entrée (pullback ou poursuite)."""
     if not tf:
         return '<td class="synth s1 none">–</td>'
     cls = "buy" if direction == "B" else "sell"
     side = "Buy" if direction == "B" else "Sell"
+    label = {"pullback": "pullback", "poursuite": "poursuite"}.get(kind, "")
+    if kind == "poursuite":
+        cls += " chase"
     tip = f"Entrée {tf} · {NAMES.get(code, code)} · {side}"
-    return f'<td class="synth s1 {cls}" title="{tip}"><b>{tf}</b> {code} {ARROW[direction]}</td>'
+    if label:
+        tip += " · " + ("retour vers la zone MA" if kind == "pullback" else "prix déjà étendu, grade plafonné à B")
+    tag = f'<div class="kind">{label}</div>' if label else ""
+    return f'<td class="synth s1 {cls}" title="{tip}"><b>{tf}</b> {code} {ARROW[direction]}{tag}</td>'
 
 
 def conf_cell(score) -> str:
@@ -216,7 +227,9 @@ def build_table(pairs, tfs, res, trends, feats, use_filter) -> str:
         gauge = bg.compute_gauge(cells, tfs, d1)
         q_score, q_grade, q_detail = bq.qualite_entree(
             code_e, sens_e, score, d1, feats.get((p, tf_e)))
-        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e), conf_cell(score),
+        kind = bs.entry_kind(cells, tfs, tf_e, code_e)
+        q_score, q_grade = bs.cap_grade(q_score, q_grade, kind)
+        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind), conf_cell(score),
                         bg.gauge_cell(gauge), bq.qual_cell(q_score, q_grade, q_detail)]
         fr_status, fr_tip = bf.pair_status(p, feats, tfs)
         rows.append(f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>')

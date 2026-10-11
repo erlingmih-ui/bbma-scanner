@@ -11,6 +11,7 @@ import pandas as pd
 
 import bbma_core as core
 import bbma_fresh as bf
+import bbma_session as bs
 from bbma_quality_codes import (
     ATR_PERIOD, CHASE_BELOW, CHASE_MISSING, CHASE_STEPS, CODE_WEIGHT,
     D1_AGREE, D1_DISAGREE, D1_UNKNOWN, GRADE_MIN, MAX_CONFLUENCE, MID_PERIOD,
@@ -29,7 +30,7 @@ def atr(df, n=ATR_PERIOD):
 
 def features_one(pair, tf, data):
     """RSI et distance signée close -> MID BB en ATR, sur la dernière bougie fermée. None si indisponible."""
-    df = core._closed_bars(pair, tf, data)
+    df = bs.closed_bars(pair, tf, data)
     if df is None:
         return None
     c = df["Close"]
@@ -41,6 +42,17 @@ def features_one(pair, tf, data):
     return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close}
 
 
+def _scan_one(pair, tf, data):
+    """((code, sens), ok) avec les bougies fermées de bbma_session (ancre H4 prise en compte)."""
+    df = bs.closed_bars(pair, tf, data)
+    if df is None:
+        return (None, None), False
+    try:
+        return core.detect(df), True
+    except Exception:
+        return (None, None), False
+
+
 def scan_quality(pairs, tfs, trend=True):
     """Scan identique à core.scan_with_rsi, plus les caractéristiques par (paire, TF).
     Retourne (res, trends, failed, total, ts, feats)."""
@@ -49,7 +61,7 @@ def scan_quality(pairs, tfs, trend=True):
     jobs = [(p, t) for p in pairs for t in tfs]
     res, failed = {}, 0
     for p, t in jobs:
-        r, ok = core._scan_one(p, t, data)
+        r, ok = _scan_one(p, t, data)
         res[(p, t)] = r
         failed += not ok
     trends = {p: core._d1_trend(p, data) for p in pairs} if trend else {}
