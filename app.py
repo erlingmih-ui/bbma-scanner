@@ -13,6 +13,7 @@ import logging
 import streamlit as st
 
 import bbma_core as core
+import bbma_fresh as bf
 import bbma_gauge as bg
 import bbma_quality as bq
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
@@ -69,6 +70,10 @@ def legend_html() -> str:
         '<div class="chips"><span class="chip buy">▲ Buy</span><span class="chip sell">▼ Sell</span>'
         '<span class="chip tp">TPW = TP Wajib (avec EXM / EXT)</span></div>'
         '<h4>Signaux</h4><div class="sigs">' + sigs_html + '</div>'
+        '<h4>Fraîcheur des données</h4>'
+        '<div class="chips"><span class="chip buy">● à jour</span><span class="chip mid">● en retard</span>'
+        '<span class="chip sell">● périmé</span></div>'
+        '<div class="note">Pastille à côté de chaque paire : âge de la dernière bougie fermée, le pire timeframe compte. Détail au survol.</div>'
         '<h4>Entrée BBMA</h4>'
         '<div>TF directeur (MOM / EXM / EXT / RE) + TF d’entrée plus bas (RE / MHV / CSAK / EXT) dans le même sens. '
         'Annulé si un TF supérieur contredit, ou si le sens va contre le filtre D1 (clôture vs EMA50).</div>'
@@ -140,6 +145,7 @@ table.bb td.qual.A{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166
 table.bb td.qual.B{background:#2962ff;color:#fff}
 table.bb td.qual.C,table.bb td.qual.none{background:#2a2e39;color:#787b86}
 table.bb td.qual .qs{font-weight:500;font-size:11px;opacity:.9}
+.fdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px;vertical-align:middle}
 /* Colonne Pair figée à gauche sur téléphone */
 table.bb th.pair{position:sticky;left:0;z-index:2;width:84px;min-width:84px;background:#1e222d}
 """ + LEGEND_CSS + """</style>"""
@@ -212,7 +218,8 @@ def build_table(pairs, tfs, res, trends, feats, use_filter) -> str:
             code_e, sens_e, score, d1, feats.get((p, tf_e)))
         tds = tf_tds + [synth_cell(tf_e, code_e, sens_e), conf_cell(score),
                         bg.gauge_cell(gauge), bq.qual_cell(q_score, q_grade, q_detail)]
-        rows.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}</tr>')
+        fr_status, fr_tip = bf.pair_status(p, feats, tfs)
+        rows.append(f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>')
 
     head = ('<tr><th class="pair">Pair</th>'
             + "".join(f"<th>{t}</th>" for t in tfs)

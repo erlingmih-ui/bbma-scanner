@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 import bbma_core as core
+import bbma_fresh as bf
 from bbma_quality_codes import (
     ATR_PERIOD, CHASE_BELOW, CHASE_MISSING, CHASE_STEPS, CODE_WEIGHT,
     D1_AGREE, D1_DISAGREE, D1_UNKNOWN, GRADE_MIN, MAX_CONFLUENCE, MID_PERIOD,
@@ -36,7 +37,8 @@ def features_one(pair, tf, data):
     a = atr(df).iloc[-1]
     r = core.rsi(c).iloc[-1]
     dist = None if pd.isna(a) or a <= 0 or pd.isna(mid) else float((c.iloc[-1] - mid) / a)
-    return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist}
+    last_close = df.index[-1] + bf.bar_length(tf)
+    return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close}
 
 
 def scan_quality(pairs, tfs, trend=True):
