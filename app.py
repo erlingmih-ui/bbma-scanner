@@ -1,7 +1,8 @@
 """Interface Streamlit du scanner BBMA OA MTF.
 
-La logique métier (téléchargement, détection, synthèse, confiance, RSI) est dans ``bbma_core``.
-La colonne Qualité est calculée par ``bbma_quality`` ; ses poids et seuils sont dans ``bbma_quality_codes``.
+La logique métier (téléchargement, détection, synthèse, confiance) est dans ``bbma_core``.
+La colonne Qualité est calculée par ``bbma_quality`` (poids dans ``bbma_quality_codes``).
+La jauge Buy/Sell est calculée par ``bbma_gauge``.
 Ce module ne gère que l'affichage et les paramètres de la barre latérale.
 
 Lancement : streamlit run app.py
@@ -12,6 +13,7 @@ import logging
 import streamlit as st
 
 import bbma_core as core
+import bbma_gauge as bg
 import bbma_quality as bq
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
 
@@ -45,6 +47,8 @@ LEGEND = (
     "Confiance : part des TF scannés dans le même sens que l'entrée (vert ≥ 70% · bleu 40–69% · gris < 40%). "
     "RSI 14 (Wilder) sous chaque cellule : vert < 30, rouge > 70, gris entre les deux ; "
     "il est purement informatif et n'entre ni dans l'entrée BBMA ni dans la confiance. "
+    "Jauge : équilibre Buy/Sell de -100 (vente forte) à +100 (achat fort), pondéré par timeframe, "
+    "force du signal et tendance D1 ; le curseur se place sur la barre, le détail est au survol. "
     "Les bougies non clôturées sont exclues du scan."
 )
 QUAL_LEGEND = (
@@ -57,7 +61,7 @@ QUAL_LEGEND = (
 CSS = """<style>
 .stApp{background:#131722}
 .bb-wrap{overflow-x:auto;background:#1e222d;border:1px solid #2a2e39;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.5);padding:6px}
-table.bb{border-collapse:separate;border-spacing:4px;width:100%;min-width:900px;font:13px/1.2 -apple-system,"Trebuchet MS",Roboto,sans-serif}
+table.bb{border-collapse:separate;border-spacing:4px;width:100%;min-width:1040px;font:13px/1.2 -apple-system,"Trebuchet MS",Roboto,sans-serif}
 table.bb th{color:#787b86;font-weight:600;padding:8px 10px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 table.bb th.pair{color:#d1d4dc;text-align:left;font-size:13px;letter-spacing:0}
 table.bb th.hmtf{color:#2962ff}
@@ -83,6 +87,15 @@ table.bb td.conf{font-weight:700;font-size:14px;min-width:70px}
 table.bb td.conf.high{background:#26a69a;color:#fff}
 table.bb td.conf.mid{background:#2962ff;color:#fff}
 table.bb td.conf.low,table.bb td.conf.none{background:#2a2e39;color:#787b86}
+/* Jauge Buy / Sell */
+table.bb td.gauge{min-width:130px;padding:8px 12px}
+table.bb td.gauge.none{background:#2a2e39;color:#787b86}
+table.bb .gbar{position:relative;height:8px;border-radius:4px;background:linear-gradient(90deg,#ef5350,#2a2e39 50%,#26a69a)}
+table.bb .gpt{position:absolute;top:-3px;width:4px;height:14px;border-radius:2px;background:#fff;transform:translateX(-50%)}
+table.bb .glab{margin-top:5px;font-size:11px;font-weight:700}
+table.bb .glab.buy{color:#26a69a}
+table.bb .glab.sell{color:#ef5350}
+table.bb .glab.neutral{color:#787b86}
 /* Qualité de l'entrée (dernière colonne) */
 table.bb td.qual{font-weight:700;font-size:14px;min-width:80px}
 table.bb td.qual.A{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166,154,.55)}
@@ -144,7 +157,7 @@ def conf_cell(score) -> str:
 
 
 def build_table(pairs, tfs, res, trends, feats, use_filter) -> str:
-    """Tableau unique : Pair, timeframes, Entrée BBMA, Confiance, Qualité (dernière colonne)."""
+    """Tableau unique : Pair, timeframes, Entrée BBMA, Confiance, Jauge, Qualité (dernière colonne)."""
     rows = []
     for p in pairs:
         cells, tf_tds = {}, []
@@ -153,19 +166,20 @@ def build_table(pairs, tfs, res, trends, feats, use_filter) -> str:
             cells[t] = (code, direction)
             rsi_v = (feats.get((p, t)) or {}).get("rsi")
             tf_tds.append(cell_html(code, direction, rsi_v))
-        # Entrée BBMA (synthèse multi-TF, filtre D1 inclus), puis Confiance, puis Qualité
-        tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, trends.get(p))
+        d1 = trends.get(p)
+        tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, d1)
         score = core.confiance_score(cells, tfs, sens_e) if sens_e else None
+        gauge = bg.compute_gauge(cells, tfs, d1)
         q_score, q_grade, q_detail = bq.qualite_entree(
-            code_e, sens_e, score, trends.get(p), feats.get((p, tf_e)))
+            code_e, sens_e, score, d1, feats.get((p, tf_e)))
         tds = tf_tds + [synth_cell(tf_e, code_e, sens_e), conf_cell(score),
-                        bq.qual_cell(q_score, q_grade, q_detail)]
+                        bg.gauge_cell(gauge), bq.qual_cell(q_score, q_grade, q_detail)]
         rows.append(f'<tr><th class="pair">{html.escape(p)}</th>{"".join(tds)}</tr>')
 
     head = ('<tr><th class="pair">Pair</th>'
             + "".join(f"<th>{t}</th>" for t in tfs)
             + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th>'
-            + '<th class="s3 hmtf">Qualité</th></tr>')
+            + '<th class="s4 hmtf">Jauge</th><th class="s3 hmtf">Qualité</th></tr>')
     return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
 
 
