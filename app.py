@@ -158,10 +158,15 @@ table.bb td.qual .qs{font-weight:500;font-size:11px;opacity:.9}
 .fdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px;vertical-align:middle}
 /* Colonne Pair figée à gauche sur téléphone */
 table.bb th.pair{position:sticky;left:0;z-index:2;width:96px;min-width:96px;white-space:nowrap;background:#1e222d}
-/* En-tête figé : reste visible au défilement vertical (le cadre défile, pas la page) */
-.bb-wrap{max-height:calc(100vh - 140px);overflow-y:auto}
-table.bb tr:first-child th{position:sticky;top:0;z-index:3;background:#262b3b;border-radius:8px;box-shadow:0 0 0 4px #262b3b}
-table.bb tr:first-child th.pair{left:0;z-index:5;background:#262b3b}
+/* En-tête figé : reste collé en haut pendant le scroll de la page.
+   overflow:visible est nécessaire : un cadre avec overflow-x:auto empêche le sticky de suivre la page.
+   Sur écran étroit (< 1150 px), on garde le défilement horizontal (l'en-tête n'est alors plus figé). */
+.bb-wrap{overflow:visible}
+@media (max-width:1150px){.bb-wrap{overflow-x:auto}}
+table.bb tr:first-child th{position:sticky;top:3.75rem;z-index:3;background:#3a4360;border-radius:8px;box-shadow:0 0 0 4px #3a4360}
+table.bb tr:first-child th.pair{left:0;z-index:5;background:#3a4360;color:#fff}
+table.bb tr:first-child th{color:#c3c8d6}
+table.bb tr:first-child th.hmtf{color:#8fb0ff}
 """ + LEGEND_CSS + """</style>"""
 
 
