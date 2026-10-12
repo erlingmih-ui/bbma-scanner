@@ -82,13 +82,15 @@ def _signals(df, lb=15):
     zone_buy_hi, zone_buy_lo = np.maximum(l5, l10), np.minimum(l5, l10)
     zone_sell_hi, zone_sell_lo = np.maximum(h5, h10), np.minimum(h5, h10)
 
-    # RE strict : bougie précédente HORS zone, bougie actuelle DANS la zone
+    # RE strict (corrigé) : pullback depuis le bon côté de la zone.
+    # Achat : bougie précédente AU-DESSUS de la zone, bougie actuelle DANS la zone.
+    # Vente : bougie précédente EN DESSOUS de la zone, bougie actuelle DANS la zone.
     re_b = ((trend == 1)
-            & (c.shift(1) < zone_buy_lo.shift(1))
+            & (c.shift(1) > zone_buy_hi.shift(1))
             & (c >= zone_buy_lo) & (c <= zone_buy_hi)
             & (l <= zone_buy_hi))
     re_s = ((trend == -1)
-            & (c.shift(1) > zone_sell_hi.shift(1))
+            & (c.shift(1) < zone_sell_lo.shift(1))
             & (c >= zone_sell_lo) & (c <= zone_sell_hi)
             & (h >= zone_sell_lo))
 
