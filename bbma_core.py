@@ -38,12 +38,6 @@ DL_WORKERS = 6
 # Mettre False pour retrouver le comportement d'origine (bougie en formation incluse).
 D1_FILTER_CLOSED_ONLY = True
 
-# Cycle BBMA : un CSAK n'est retenu que s'il suit un MHV de même sens (lui-même précédé d'un Extreme)
-# dans les CSAK_WINDOW bougies précédentes. Mettre False pour retrouver le CSAK brut d'origine.
-# Seul le CSAK affiché est filtré : la tendance mémorisée du RE reste calculée sur le CSAK brut.
-CSAK_CYCLE_ONLY = True
-CSAK_WINDOW = 15
-
 # Cache disque des bougies : un fichier Parquet par (paire, intervalle), dans ./cache à côté de ce module.
 # Les bougies fermées sont conservées et s'accumulent d'un lancement à l'autre.
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
@@ -82,11 +76,6 @@ def _signals(df, lb=15):
     mhv_b = rec(any_b.shift(1), lb) & (l <= low) & (c > low)
     arah_s = (c < mid) & (c < l5) & (c < l10)                                   # CSAK / Candle Arah
     arah_b = (c > mid) & (c > h5) & (c > h10)
-    if CSAK_CYCLE_ONLY:                                                         # CSAK du cycle : MHV récent, même sens
-        csak_b = arah_b & rec(mhv_b.shift(1), CSAK_WINDOW)
-        csak_s = arah_s & rec(mhv_s.shift(1), CSAK_WINDOW)
-    else:
-        csak_b, csak_s = arah_b, arah_s
     # tendance mémorisée (m_lastTrendDir) : dernier MOM / Arah
     trend = pd.Series(np.where(mom_b | arah_b, 1, np.where(mom_s | arah_s, -1, np.nan)), index=c.index).ffill()
     # Zones MA5/MA10
@@ -104,7 +93,7 @@ def _signals(df, lb=15):
             & (h >= zone_sell_lo))
 
     return {"MOM": (mom_b, mom_s), "EXM": (exm_b, exm_s), "EXT": (ext_b, ext_s),
-            "MHV": (mhv_b, mhv_s), "CSAK": (csak_b, csak_s), "RE": (re_b, re_s)}
+            "MHV": (mhv_b, mhv_s), "CSAK": (arah_b, arah_s), "RE": (re_b, re_s)}
 
 
 def _at(sig, pos):
