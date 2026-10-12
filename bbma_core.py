@@ -66,8 +66,10 @@ def wma(s, n):
     return pd.Series(out, index=s.index)
 
 
-def _signals(df, lb=15):
-    """Signaux de toutes les bougies : {code: (série buy, série sell)}. Calcul causal (aucune donnée future)."""
+def _signals(df, lb=15, cycle=None):
+    """Signaux de toutes les bougies : {code: (série buy, série sell)}. Calcul causal (aucune donnée future).
+    cycle : True = CSAK du cycle BBMA seulement, False = CSAK brut, None = valeur de CSAK_CYCLE_ONLY."""
+    cycle = CSAK_CYCLE_ONLY if cycle is None else cycle
     o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
     mid = c.rolling(20).mean(); sd = c.rolling(20).std(ddof=0)
     top, low = mid + 2 * sd, mid - 2 * sd
@@ -82,7 +84,7 @@ def _signals(df, lb=15):
     mhv_b = rec(any_b.shift(1), lb) & (l <= low) & (c > low)
     arah_s = (c < mid) & (c < l5) & (c < l10)                                   # CSAK / Candle Arah
     arah_b = (c > mid) & (c > h5) & (c > h10)
-    if CSAK_CYCLE_ONLY:                                                         # CSAK du cycle : MHV récent, même sens
+    if cycle:                                                                   # CSAK du cycle : MHV récent, même sens
         csak_b = arah_b & rec(mhv_b.shift(1), CSAK_WINDOW)
         csak_s = arah_s & rec(mhv_s.shift(1), CSAK_WINDOW)
     else:
@@ -116,21 +118,21 @@ def _at(sig, pos):
     return None, None
 
 
-def detect(df, lb=15):
+def detect(df, lb=15, cycle=None):
     """Signal de la dernière bougie : (code, sens) avec sens 'B' (buy) ou 'S' (sell).
     Priorité : MOM > EXM (Extreme Magic, MA10) > EXT (MA5) > MHV > CSAK (Candle Arah) > RE.
     TP Wajib = flag déclenché par EXM/EXT uniquement (affiché à côté du code)."""
-    return _at(_signals(df, lb), -1)
+    return _at(_signals(df, lb, cycle), -1)
 
 
 RECENT_BARS = 5     # profondeur de recherche du dernier signal (affichage seulement, hors synthèse)
 
 
-def recent_signal(df, lookback=RECENT_BARS, lb=15):
+def recent_signal(df, lookback=RECENT_BARS, lb=15, cycle=None):
     """Dernier signal parmi les `lookback` bougies qui précèdent la dernière : (code, sens, age) ou None.
     age = nombre de bougies avant la dernière (1 = l'avant-dernière). Affichage uniquement :
     la synthèse, la confiance, la jauge et la qualité n'utilisent que detect()."""
-    sig = _signals(df, lb)
+    sig = _signals(df, lb, cycle)
     for age in range(1, min(lookback, len(df) - 1) + 1):
         code, sens = _at(sig, -1 - age)
         if code:
