@@ -28,7 +28,7 @@ def atr(df, n=ATR_PERIOD):
     return tr.rolling(n).mean()
 
 
-def features_one(pair, tf, data, cycle=None):
+def features_one(pair, tf, data):
     """RSI et distance signée close -> MID BB en ATR, sur la dernière bougie fermée. None si indisponible."""
     df = bs.closed_bars(pair, tf, data)
     if df is None:
@@ -40,24 +40,24 @@ def features_one(pair, tf, data, cycle=None):
     dist = None if pd.isna(a) or a <= 0 or pd.isna(mid) else float((c.iloc[-1] - mid) / a)
     last_close = df.index[-1] + bf.bar_length(tf)
     try:
-        recent = core.recent_signal(df, cycle=cycle)      # dernier signal des bougies précédentes (affichage grisé)
+        recent = core.recent_signal(df)      # dernier signal des bougies précédentes (affichage grisé)
     except Exception:
         recent = None
     return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close, "recent": recent}
 
 
-def _scan_one(pair, tf, data, cycle=None):
+def _scan_one(pair, tf, data):
     """((code, sens), ok) avec les bougies fermées de bbma_session (ancre H4 prise en compte)."""
     df = bs.closed_bars(pair, tf, data)
     if df is None:
         return (None, None), False
     try:
-        return core.detect(df, cycle=cycle), True
+        return core.detect(df), True
     except Exception:
         return (None, None), False
 
 
-def scan_quality(pairs, tfs, trend=True, cycle=None):
+def scan_quality(pairs, tfs, trend=True):
     """Scan identique à core.scan_with_rsi, plus les caractéristiques par (paire, TF).
     Retourne (res, trends, failed, total, ts, feats)."""
     pairs, tfs = list(pairs), list(tfs)
@@ -65,11 +65,11 @@ def scan_quality(pairs, tfs, trend=True, cycle=None):
     jobs = [(p, t) for p in pairs for t in tfs]
     res, failed = {}, 0
     for p, t in jobs:
-        r, ok = _scan_one(p, t, data, cycle)
+        r, ok = _scan_one(p, t, data)
         res[(p, t)] = r
         failed += not ok
     trends = {p: core._d1_trend(p, data) for p in pairs} if trend else {}
-    feats = {(p, t): features_one(p, t, data, cycle) for p, t in jobs}
+    feats = {(p, t): features_one(p, t, data) for p, t in jobs}
     return res, trends, failed, len(jobs), datetime.now(timezone.utc), feats
 
 

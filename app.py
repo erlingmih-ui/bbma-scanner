@@ -17,7 +17,6 @@ import bbma_fresh as bf
 import bbma_session as bs
 import bbma_gauge as bg
 import bbma_quality as bq
-import bbma_welcome as welcome
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
@@ -26,7 +25,7 @@ APP_TITLE = "BBMA OA MTF Scanner"
 DEFAULT_PAIRS = "EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF NZDUSD EURJPY GBPJPY EURGBP XAUUSD BTCUSD"
 MAX_PAIRS = 12
 CACHE_TTL = 240          # secondes ; inférieur à AUTO_REFRESH pour qu'un vrai scan ait lieu à chaque cycle
-SCAN_VERSION = 5         # à incrémenter quand la logique de détection ou la structure de feats change : invalide le cache
+SCAN_VERSION = 4         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
 AUTO_REFRESH = 300       # secondes entre deux scans automatiques
 RSI_LOW, RSI_HIGH = 30, 70   # repères visuels uniquement (couleur), aucun effet sur les signaux
 
@@ -62,23 +61,20 @@ LEGEND_CSS = """
 """
 
 
-def legend_html(show_recent=False, cycle=True) -> str:
+def legend_html(show_recent=False) -> str:
     """Légende organisée par sections, avec les mêmes couleurs que le tableau."""
     recent_note = ('<div class="note">Texte grisé « CODE ▲ −n » : la dernière bougie n’a pas de signal ; c’est le dernier signal, '
                    'n bougies plus tôt (information seulement, non utilisé par la synthèse).</div>') if show_recent else ""
-    sigs = [("MOM", "Momentum"), ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh (1 par mouvement)"),
-            ("RE", "Reentry (rejet confirmé, MA5/10 ou MID)")]
+    sigs = [("MOM", "Momentum"), ("EXM", "Extreme Magic (MA10)"), ("EXT", "Extreme (MA5)"),
+            ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh"), ("RE", "Reentry (strict)")]
     sigs_html = "".join(f"<div><b>{code}</b> · {name}</div>" for code, name in sigs)
-    cycle_note = ('<div class="note">Filtre Cycle BBMA actif : un CSAK n’est affiché que s’il suit un MHV de même sens '
-                  f'(lui-même précédé d’un Extreme), dans les {core.CSAK_WINDOW} bougies précédentes. Sur tous les timeframes et toutes les paires.</div>') if cycle else ""
     return (
         '<div class="bb-legend">'
         '<h4>Direction</h4>'
         '<div class="chips"><span class="chip buy">▲ Buy</span><span class="chip sell">▼ Sell</span>'
-        '<span class="chip tp">TPW = TP Wajib (alerte EXT / EXM)</span></div>'
+        '<span class="chip tp">TPW = TP Wajib (avec EXM / EXT)</span></div>'
         '<h4>Signaux</h4><div class="sigs">' + sigs_html + '</div>'
-        + '<div class="note">EXT / EXM : alertes d’épuisement, affichées pour information. Elles ne déclenchent jamais une entrée.</div>'
-        + cycle_note + recent_note +
+        + recent_note +
         '<h4>Fraîcheur des données</h4>'
         '<div class="chips"><span class="chip buy">● à jour</span><span class="chip mid">● en retard</span>'
         '<span class="chip sell">● périmé</span></div>'
@@ -173,10 +169,10 @@ table.bb tr:first-child th.pair{left:0;z-index:5}
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def run_scan(pairs: tuple, tfs: tuple, version: int, cycle: bool):
+def run_scan(pairs: tuple, tfs: tuple, version: int):
     """Scan complet (signaux, tendances D1, RSI, ATR), mis en cache.
     Retourne (res, trends, failed, total, ts, feats) ; feats contient le RSI et la distance ATR par (paire, TF)."""
-    return bq.scan_quality(pairs, tfs, trend=True, cycle=cycle)   # version et cycle : font partie de la clé de cache
+    return bq.scan_quality(pairs, tfs, trend=True)   # version : fait partie de la clé de cache
 
 
 def rsi_html(value) -> str:
@@ -298,23 +294,17 @@ def sidebar_settings():
     use_filter = st.sidebar.checkbox("Filtre D1 (EMA50)", True)
     show_recent = st.sidebar.checkbox("Afficher les signaux récents (grisés)", False,
                                       help="Dernier signal des bougies précédentes quand la dernière n'en a pas. Information seulement.")
-    cycle = st.sidebar.checkbox("Filtre Cycle BBMA (CSAK)", core.CSAK_CYCLE_ONLY,
-                                help="Actif : un CSAK n'est retenu que s'il suit un MHV de même sens (lui-même précédé d'un Extreme). "
-                                     "S'applique à tous les timeframes et à toutes les paires. Désactivé : CSAK brut.")
     auto = st.sidebar.checkbox(f"Scan automatique toutes les {AUTO_REFRESH // 60} min", True)
     if st.sidebar.button("Rafraîchir"):
         st.cache_data.clear()
-    return pairs, tfs, use_filter, auto, show_recent, cycle
+    return pairs, tfs, use_filter, auto, show_recent
 
 
 def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
-    if not welcome.passed():          # page d'accueil, une fois par session
-        welcome.render()
-        st.stop()
     st.title(APP_TITLE)
 
-    pairs, tfs, use_filter, auto, show_recent, cycle = sidebar_settings()
+    pairs, tfs, use_filter, auto, show_recent = sidebar_settings()
     if not pairs or not tfs:
         st.info("Choisis au moins une paire et un timeframe dans la barre latérale.")
         st.stop()
@@ -322,7 +312,7 @@ def main():
     @st.fragment(run_every=AUTO_REFRESH if auto else None)   # ne relance que cette partie
     def live():
         with st.spinner("Scan en cours..."):
-            res, trends, failed, total, ts, feats = run_scan(tuple(pairs), tuple(tfs), SCAN_VERSION, cycle)
+            res, trends, failed, total, ts, feats = run_scan(tuple(pairs), tuple(tfs), SCAN_VERSION)
 
         if failed:
             st.warning(
@@ -335,7 +325,7 @@ def main():
         st.button("Masquer la légende" if legend_open else "Afficher la légende",
                   key="btn_legend", on_click=_toggle_legend)
         if legend_open:
-            st.markdown(legend_html(show_recent, cycle), unsafe_allow_html=True)
+            st.markdown(legend_html(show_recent), unsafe_allow_html=True)
         suffix = " · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"
         st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC{suffix}")
         st.markdown(DISCLAIMER_CSS + DISCLAIMER_HTML, unsafe_allow_html=True)
