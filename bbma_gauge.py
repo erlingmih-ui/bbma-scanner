@@ -12,7 +12,7 @@ TF_WEIGHT = {"MN": 5.0, "W1": 4.0, "D1": 3.0, "H4": 2.0, "H1": 1.5, "M15": 1.0, 
 DEFAULT_TF_WEIGHT = 1.0
 
 # --- Force de chaque signal (1.0 = signal fort) ---
-CODE_STRENGTH = {"MOM": 1.0, "EXM": 1.0, "EXT": 1.0, "RE": 0.8, "MHV": 0.8, "CSAK": 0.6}
+CODE_STRENGTH = {"MOM": 1.0, "RE": 0.8, "MHV": 0.8, "CSAK": 0.6}   # EXT/EXM retirés (alertes seulement)
 DEFAULT_CODE_STRENGTH = 0.6
 
 # --- Poids de la tendance D1 (EMA50) ---
@@ -36,7 +36,7 @@ def compute_gauge(cells, tfs, d1):
         w = TF_WEIGHT.get(t, DEFAULT_TF_WEIGHT)
         total += w
         code, sens = cells.get(t, (None, None))
-        if not code:
+        if code not in CODE_STRENGTH:          # codes hors décision (EXT, EXM...) : ignorés
             continue
         s = w * CODE_STRENGTH.get(code, DEFAULT_CODE_STRENGTH)
         if sens == "B":

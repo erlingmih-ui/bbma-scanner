@@ -66,8 +66,8 @@ def legend_html(show_recent=False, cycle=True) -> str:
     """Légende organisée par sections, avec les mêmes couleurs que le tableau."""
     recent_note = ('<div class="note">Texte grisé « CODE ▲ −n » : la dernière bougie n’a pas de signal ; c’est le dernier signal, '
                    'n bougies plus tôt (information seulement, non utilisé par la synthèse).</div>') if show_recent else ""
-    sigs = [("MOM", "Momentum"), ("EXM", "Extreme Magic (MA10)"), ("EXT", "Extreme (MA5)"),
-            ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh"), ("RE", "Reentry (strict)")]
+    sigs = [("MOM", "Momentum"), ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh (1 par mouvement)"),
+            ("RE", "Reentry (rejet confirmé, MA5/10 ou MID)")]
     sigs_html = "".join(f"<div><b>{code}</b> · {name}</div>" for code, name in sigs)
     cycle_note = ('<div class="note">Filtre Cycle BBMA actif : un CSAK n’est affiché que s’il suit un MHV de même sens '
                   f'(lui-même précédé d’un Extreme), dans les {core.CSAK_WINDOW} bougies précédentes. Sur tous les timeframes et toutes les paires.</div>') if cycle else ""
@@ -75,8 +75,9 @@ def legend_html(show_recent=False, cycle=True) -> str:
         '<div class="bb-legend">'
         '<h4>Direction</h4>'
         '<div class="chips"><span class="chip buy">▲ Buy</span><span class="chip sell">▼ Sell</span>'
-        '<span class="chip tp">TPW = TP Wajib (avec EXM / EXT)</span></div>'
+        '<span class="chip tp">TPW = TP Wajib (alerte EXT / EXM)</span></div>'
         '<h4>Signaux</h4><div class="sigs">' + sigs_html + '</div>'
+        + '<div class="note">EXT / EXM : alertes d’épuisement, affichées pour information. Elles ne déclenchent jamais une entrée.</div>'
         + cycle_note + recent_note +
         '<h4>Fraîcheur des données</h4>'
         '<div class="chips"><span class="chip buy">● à jour</span><span class="chip mid">● en retard</span>'

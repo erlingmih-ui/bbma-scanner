@@ -1,39 +1,18 @@
-"""Ancre de session du H4 et classification de l'entrée (pullback ou poursuite).
+"""Classification de l'entrée (pullback ou poursuite) et grade plafonné.
 
-- H4_SESSION choisit où commencent les bougies H4 :
-    "UTC"  : 00, 04, 08... UTC (comportement actuel de bbma_core)
-    "NY17" : 17 h, 21 h, 01 h... heure de New York (clôture forex usuelle)
-  Mettre la valeur qui correspond au graphique de votre broker.
-- entry_kind distingue un vrai pullback (signal d'entrée sur un TF inférieur) d'une poursuite
-  (le TF directeur sert d'entrée, faute de TF d'entrée). Une poursuite ne peut pas être grade A.
-Module ajouté : bbma_core.py n'est pas modifié.
+La session H4 et le resampling H4 sont désormais définis UNIQUEMENT dans bbma_core
+(core.H4_SESSION, core.resample_h4, core._closed_bars). Ce module les réexporte pour compatibilité.
 """
 import bbma_core as core
 from bbma_quality_codes import GRADE_MIN
 
-H4_SESSION = "UTC"
-SESSIONS = {"UTC": ("UTC", None), "NY17": ("America/New_York", "17h")}
-AGG = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
-
-
-def resample_h4(df1h, session=H4_SESSION):
-    """Bougies H4 à partir de bougies H1 (UTC), ancrées selon la session choisie."""
-    if session == "UTC":
-        return df1h.resample("4h").agg(AGG).dropna()
-    tz, offset = SESSIONS[session]
-    local = df1h.tz_convert(tz).resample("4h", origin="start_day", offset=offset).agg(AGG).dropna()
-    return local.tz_convert("UTC")
+H4_SESSION = core.H4_SESSION
+resample_h4 = core.resample_h4
 
 
 def closed_bars(pair, tf, data):
-    """Comme core._closed_bars, mais le H4 respecte H4_SESSION. None si indisponible."""
-    if tf != "H4":
-        return core._closed_bars(pair, tf, data)
-    raw = data.get((pair, core.TFS["H4"][0], core.TFS["H4"][1]))
-    if raw is None:
-        return None
-    df = resample_h4(raw).iloc[:-1]          # la bougie H4 en cours n'est pas fermée
-    return df if len(df) >= core.MIN_BARS else None
+    """Bougies fermées, identiques à celles de core (H4 inclus)."""
+    return core._closed_bars(pair, tf, data)
 
 
 def entry_kind(cells, tf_dispo, tf_e, code_e):

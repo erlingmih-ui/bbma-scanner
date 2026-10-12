@@ -17,7 +17,7 @@ MAX_CHASE = 20               # anti-poursuite (distance à la MID BB en ATR)
 MAX_D1 = 10                  # accord avec le filtre D1 (EMA50)
 
 # --- Signal d'entrée : points par code (chaque valeur <= MAX_SIGNAL) ---
-CODE_WEIGHT = {"RE": 25, "MHV": 22, "CSAK": 18, "EXT": 12, "EXM": 10, "MOM": 5}
+CODE_WEIGHT = {"RE": 25, "MHV": 22, "CSAK": 18, "MOM": 5}   # EXT/EXM ne sont plus des entrées
 
 # --- RSI (du point de vue du trade : élevé = favorable au sens) ---
 RSI_ZONE_OVERBOUGHT = 70     # au-dessus : suracheté dans le sens du trade
