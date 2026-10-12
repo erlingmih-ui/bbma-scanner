@@ -163,10 +163,8 @@ table.bb th.pair{position:sticky;left:0;z-index:2;width:96px;min-width:96px;whit
    Sur écran étroit (< 1150 px), on garde le défilement horizontal (l'en-tête n'est alors plus figé). */
 .bb-wrap{overflow:visible}
 @media (max-width:1150px){.bb-wrap{overflow-x:auto}}
-table.bb tr:first-child th{position:sticky;top:3.75rem;z-index:3;background:#3a4360;border-radius:8px;box-shadow:0 0 0 4px #3a4360}
-table.bb tr:first-child th.pair{left:0;z-index:5;background:#3a4360;color:#fff}
-table.bb tr:first-child th{color:#c3c8d6}
-table.bb tr:first-child th.hmtf{color:#8fb0ff}
+table.bb tr:first-child th{position:sticky;top:3.75rem;z-index:3;background:#1e222d;box-shadow:0 0 0 4px #1e222d}
+table.bb tr:first-child th.pair{left:0;z-index:5}
 """ + LEGEND_CSS + """</style>"""
 
 
