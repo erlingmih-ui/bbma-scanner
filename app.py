@@ -158,6 +158,10 @@ table.bb td.qual .qs{font-weight:500;font-size:11px;opacity:.9}
 .fdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px;vertical-align:middle}
 /* Colonne Pair figée à gauche sur téléphone */
 table.bb th.pair{position:sticky;left:0;z-index:2;width:96px;min-width:96px;white-space:nowrap;background:#1e222d}
+/* En-tête figé : reste visible au défilement vertical (le cadre défile, pas la page) */
+.bb-wrap{max-height:calc(100vh - 140px);overflow-y:auto}
+table.bb tr:first-child th{position:sticky;top:0;z-index:3;background:#262b3b;border-radius:8px;box-shadow:0 0 0 4px #262b3b}
+table.bb tr:first-child th.pair{left:0;z-index:5;background:#262b3b}
 """ + LEGEND_CSS + """</style>"""
 
 
