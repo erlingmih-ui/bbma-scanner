@@ -17,6 +17,7 @@ import bbma_fresh as bf
 import bbma_session as bs
 import bbma_gauge as bg
 import bbma_quality as bq
+import bbma_welcome as welcome
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
@@ -302,6 +303,9 @@ def sidebar_settings():
 
 def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
+    if not welcome.passed():          # page d'accueil, une fois par session
+        welcome.render()
+        st.stop()
     st.title(APP_TITLE)
 
     pairs, tfs, use_filter, auto, show_recent = sidebar_settings()
