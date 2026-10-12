@@ -60,10 +60,8 @@ def wma(s, n):
     return pd.Series(out, index=s.index)
 
 
-def detect(df, lb=15):
-    """Signal de la dernière bougie : (code, sens) avec sens 'B' (buy) ou 'S' (sell).
-    Priorité : MOM > EXM (Extreme Magic, MA10) > EXT (MA5) > MHV > CSAK (Candle Arah) > RE.
-    TP Wajib = flag déclenché par EXM/EXT uniquement (affiché à côté du code)."""
+def _signals(df, lb=15):
+    """Signaux de toutes les bougies : {code: (série buy, série sell)}. Calcul causal (aucune donnée future)."""
     o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
     mid = c.rolling(20).mean(); sd = c.rolling(20).std(ddof=0)
     top, low = mid + 2 * sd, mid - 2 * sd
@@ -94,13 +92,39 @@ def detect(df, lb=15):
             & (c >= zone_sell_lo) & (c <= zone_sell_hi)
             & (h >= zone_sell_lo))
 
-    sig = {"MOM": (mom_b, mom_s), "EXM": (exm_b, exm_s), "EXT": (ext_b, ext_s),
-           "MHV": (mhv_b, mhv_s), "CSAK": (arah_b, arah_s), "RE": (re_b, re_s)}
+    return {"MOM": (mom_b, mom_s), "EXM": (exm_b, exm_s), "EXT": (ext_b, ext_s),
+            "MHV": (mhv_b, mhv_s), "CSAK": (arah_b, arah_s), "RE": (re_b, re_s)}
+
+
+def _at(sig, pos):
+    """(code, sens) de la bougie à la position pos (priorité BBMA), ou (None, None)."""
     for code in PRIORITY:
         b, s = sig[code]
-        if b.iloc[-1]: return code, "B"
-        if s.iloc[-1]: return code, "S"
+        if b.iloc[pos]: return code, "B"
+        if s.iloc[pos]: return code, "S"
     return None, None
+
+
+def detect(df, lb=15):
+    """Signal de la dernière bougie : (code, sens) avec sens 'B' (buy) ou 'S' (sell).
+    Priorité : MOM > EXM (Extreme Magic, MA10) > EXT (MA5) > MHV > CSAK (Candle Arah) > RE.
+    TP Wajib = flag déclenché par EXM/EXT uniquement (affiché à côté du code)."""
+    return _at(_signals(df, lb), -1)
+
+
+RECENT_BARS = 5     # profondeur de recherche du dernier signal (affichage seulement, hors synthèse)
+
+
+def recent_signal(df, lookback=RECENT_BARS, lb=15):
+    """Dernier signal parmi les `lookback` bougies qui précèdent la dernière : (code, sens, age) ou None.
+    age = nombre de bougies avant la dernière (1 = l'avant-dernière). Affichage uniquement :
+    la synthèse, la confiance, la jauge et la qualité n'utilisent que detect()."""
+    sig = _signals(df, lb)
+    for age in range(1, min(lookback, len(df) - 1) + 1):
+        code, sens = _at(sig, -1 - age)
+        if code:
+            return code, sens, age
+    return None
 
 
 def synthese(cells, tf_dispo, use_filter, d1_trend):

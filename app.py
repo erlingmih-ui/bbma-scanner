@@ -25,6 +25,7 @@ APP_TITLE = "BBMA OA MTF Scanner"
 DEFAULT_PAIRS = "EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF NZDUSD EURJPY GBPJPY EURGBP XAUUSD BTCUSD"
 MAX_PAIRS = 12
 CACHE_TTL = 240          # secondes ; inférieur à AUTO_REFRESH pour qu'un vrai scan ait lieu à chaque cycle
+SCAN_VERSION = 3         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
 AUTO_REFRESH = 300       # secondes entre deux scans automatiques
 RSI_LOW, RSI_HIGH = 30, 70   # repères visuels uniquement (couleur), aucun effet sur les signaux
 
@@ -71,6 +72,7 @@ def legend_html() -> str:
         '<div class="chips"><span class="chip buy">▲ Buy</span><span class="chip sell">▼ Sell</span>'
         '<span class="chip tp">TPW = TP Wajib (avec EXM / EXT)</span></div>'
         '<h4>Signaux</h4><div class="sigs">' + sigs_html + '</div>'
+        '<div class="note">Texte grisé « CODE ▲ −n » : la dernière bougie n’a pas de signal ; c’est le dernier signal, n bougies plus tôt (information seulement, non utilisé par la synthèse).</div>'
         '<h4>Fraîcheur des données</h4>'
         '<div class="chips"><span class="chip buy">● à jour</span><span class="chip mid">● en retard</span>'
         '<span class="chip sell">● périmé</span></div>'
@@ -113,6 +115,7 @@ table.bb th.pair{color:#d1d4dc;text-align:left;font-size:13px;letter-spacing:0}
 table.bb th.hmtf{color:#2962ff}
 table.bb td{padding:8px 10px;text-align:center;border-radius:8px;white-space:nowrap;transition:transform .12s,box-shadow .12s,filter .12s}
 table.bb td.none{color:#434651}
+table.bb td.none .ghost{font-size:11px;font-weight:600;color:#5c6070;opacity:.8}
 table.bb td.buy{background:rgba(38,166,154,.16);color:#26a69a}
 table.bb td.sell{background:rgba(239,83,80,.16);color:#ef5350}
 table.bb td.strong{box-shadow:inset 3px 0 0 currentColor}
@@ -152,15 +155,15 @@ table.bb td.qual.C,table.bb td.qual.none{background:#2a2e39;color:#787b86}
 table.bb td.qual .qs{font-weight:500;font-size:11px;opacity:.9}
 .fdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px;vertical-align:middle}
 /* Colonne Pair figée à gauche sur téléphone */
-table.bb th.pair{position:sticky;left:0;z-index:2;width:84px;min-width:84px;background:#1e222d}
+table.bb th.pair{position:sticky;left:0;z-index:2;width:96px;min-width:96px;white-space:nowrap;background:#1e222d}
 """ + LEGEND_CSS + """</style>"""
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def run_scan(pairs: tuple, tfs: tuple):
+def run_scan(pairs: tuple, tfs: tuple, version: int):
     """Scan complet (signaux, tendances D1, RSI, ATR), mis en cache.
     Retourne (res, trends, failed, total, ts, feats) ; feats contient le RSI et la distance ATR par (paire, TF)."""
-    return bq.scan_quality(pairs, tfs, trend=True)
+    return bq.scan_quality(pairs, tfs, trend=True)   # version : fait partie de la clé de cache
 
 
 def rsi_html(value) -> str:
@@ -171,11 +174,18 @@ def rsi_html(value) -> str:
     return f'<div class="rsi {cls}">{round(value)}</div>'
 
 
-def cell_html(code, direction, rsi_value) -> str:
-    """Cellule d'un signal pour un couple (paire, timeframe), avec le RSI du même TF en dessous."""
+def cell_html(code, direction, rsi_value, recent=None) -> str:
+    """Cellule d'un signal pour un couple (paire, timeframe), avec le RSI du même TF en dessous.
+    recent : (code, sens, age) du dernier signal des bougies précédentes, affiché en grisé si la dernière n'en a pas."""
     sub = rsi_html(rsi_value)
     rsi_tip = "" if rsi_value is None else f" · RSI {round(rsi_value)}"
     if not code:
+        if recent:
+            rc, rd, age = recent
+            ghost = f'<div class="ghost">{rc} {ARROW[rd]} −{age}</div>'
+            side = "Buy" if rd == "B" else "Sell"
+            tip = f"Aucun signal sur la dernière bougie · dernier : {NAMES.get(rc, rc)} · {side}, il y a {age} bougie(s){rsi_tip}"
+            return f'<td class="none" title="{tip}">{ghost}{sub}</td>'
         return f'<td class="none" title="Aucun signal{rsi_tip}"><div>–</div>{sub}</td>'
     cls = "buy" if direction == "B" else "sell"
     strong = " strong" if code in STRONG_CODES else ""
@@ -220,7 +230,8 @@ def build_table(pairs, tfs, res, trends, feats, use_filter) -> str:
             code, direction = res[(p, t)]
             cells[t] = (code, direction)
             rsi_v = (feats.get((p, t)) or {}).get("rsi")
-            tf_tds.append(cell_html(code, direction, rsi_v))
+            recent = (feats.get((p, t)) or {}).get("recent")
+            tf_tds.append(cell_html(code, direction, rsi_v, recent))
         d1 = trends.get(p)
         tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, d1)
         score = core.confiance_score(cells, tfs, sens_e) if sens_e else None
@@ -269,7 +280,7 @@ def main():
     @st.fragment(run_every=AUTO_REFRESH if auto else None)   # ne relance que cette partie
     def live():
         with st.spinner("Scan en cours..."):
-            res, trends, failed, total, ts, feats = run_scan(tuple(pairs), tuple(tfs))
+            res, trends, failed, total, ts, feats = run_scan(tuple(pairs), tuple(tfs), SCAN_VERSION)
 
         if failed:
             st.warning(

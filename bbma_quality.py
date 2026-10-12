@@ -39,7 +39,11 @@ def features_one(pair, tf, data):
     r = core.rsi(c).iloc[-1]
     dist = None if pd.isna(a) or a <= 0 or pd.isna(mid) else float((c.iloc[-1] - mid) / a)
     last_close = df.index[-1] + bf.bar_length(tf)
-    return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close}
+    try:
+        recent = core.recent_signal(df)      # dernier signal des bougies précédentes (affichage grisé)
+    except Exception:
+        recent = None
+    return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close, "recent": recent}
 
 
 def _scan_one(pair, tf, data):
