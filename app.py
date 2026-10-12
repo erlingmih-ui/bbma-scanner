@@ -261,6 +261,27 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False) -
     return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
 
 
+DISCLAIMER_CSS = """<style>
+.bb-disclaimer{margin-top:14px;padding:12px 16px;background:#1e222d;border:1px solid #2a2e39;border-left:3px solid #BA7517;border-radius:10px;font:12px/1.55 -apple-system,"Trebuchet MS",Roboto,sans-serif;color:#787b86}
+.bb-disclaimer b{color:#b2b5be}
+</style>"""
+
+DISCLAIMER_HTML = (
+    '<div class="bb-disclaimer"><b>Avertissement.</b> Ce scanner est un outil d’analyse technique fourni à titre '
+    'purement informatif et éducatif. Il ne constitue ni un conseil en investissement, ni une recommandation '
+    'd’achat ou de vente, ni une incitation à trader. Le trading du forex, des métaux et des cryptomonnaies '
+    'comporte un risque élevé de perte, pouvant dépasser le capital engagé. Les signaux peuvent être erronés '
+    'ou retardés (données différées) et les performances passées ne préjugent pas des résultats futurs. '
+    '<b>Vous restez seul responsable de vos décisions et de vos pertes éventuelles</b> ; '
+    'consultez un conseiller financier agréé avant d’investir.</div>'
+)
+
+
+def _toggle_legend():
+    """Bascule l'affichage de la légende (masquée par défaut)."""
+    st.session_state["show_legend"] = not st.session_state.get("show_legend", False)
+
+
 def sidebar_settings():
     """Affiche la barre latérale et retourne les paramètres choisis."""
     raw = st.sidebar.text_area(f"Paires (max {MAX_PAIRS})", DEFAULT_PAIRS)
@@ -300,9 +321,14 @@ def main():
             )
 
         st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent), unsafe_allow_html=True)
-        st.markdown(legend_html(show_recent), unsafe_allow_html=True)
+        legend_open = st.session_state.get("show_legend", False)
+        st.button("Masquer la légende" if legend_open else "Afficher la légende",
+                  key="btn_legend", on_click=_toggle_legend)
+        if legend_open:
+            st.markdown(legend_html(show_recent), unsafe_allow_html=True)
         suffix = " · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"
         st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC{suffix}")
+        st.markdown(DISCLAIMER_CSS + DISCLAIMER_HTML, unsafe_allow_html=True)
 
     live()
 
