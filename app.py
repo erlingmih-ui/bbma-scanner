@@ -25,7 +25,7 @@ APP_TITLE = "BBMA OA MTF Scanner"
 DEFAULT_PAIRS = "EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF NZDUSD EURJPY GBPJPY EURGBP XAUUSD BTCUSD"
 MAX_PAIRS = 12
 CACHE_TTL = 240          # secondes ; inférieur à AUTO_REFRESH pour qu'un vrai scan ait lieu à chaque cycle
-SCAN_VERSION = 3         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
+SCAN_VERSION = 4         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
 AUTO_REFRESH = 300       # secondes entre deux scans automatiques
 RSI_LOW, RSI_HIGH = 30, 70   # repères visuels uniquement (couleur), aucun effet sur les signaux
 
@@ -61,8 +61,10 @@ LEGEND_CSS = """
 """
 
 
-def legend_html() -> str:
+def legend_html(show_recent=False) -> str:
     """Légende organisée par sections, avec les mêmes couleurs que le tableau."""
+    recent_note = ('<div class="note">Texte grisé « CODE ▲ −n » : la dernière bougie n’a pas de signal ; c’est le dernier signal, '
+                   'n bougies plus tôt (information seulement, non utilisé par la synthèse).</div>') if show_recent else ""
     sigs = [("MOM", "Momentum"), ("EXM", "Extreme Magic (MA10)"), ("EXT", "Extreme (MA5)"),
             ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh"), ("RE", "Reentry (strict)")]
     sigs_html = "".join(f"<div><b>{code}</b> · {name}</div>" for code, name in sigs)
@@ -72,7 +74,7 @@ def legend_html() -> str:
         '<div class="chips"><span class="chip buy">▲ Buy</span><span class="chip sell">▼ Sell</span>'
         '<span class="chip tp">TPW = TP Wajib (avec EXM / EXT)</span></div>'
         '<h4>Signaux</h4><div class="sigs">' + sigs_html + '</div>'
-        '<div class="note">Texte grisé « CODE ▲ −n » : la dernière bougie n’a pas de signal ; c’est le dernier signal, n bougies plus tôt (information seulement, non utilisé par la synthèse).</div>'
+        + recent_note +
         '<h4>Fraîcheur des données</h4>'
         '<div class="chips"><span class="chip buy">● à jour</span><span class="chip mid">● en retard</span>'
         '<span class="chip sell">● périmé</span></div>'
@@ -221,7 +223,7 @@ def conf_cell(score) -> str:
     return f'<td class="conf s2 {cls}">{pct}%</td>'
 
 
-def build_table(pairs, tfs, res, trends, feats, use_filter) -> str:
+def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False) -> str:
     """Tableau unique : Pair, timeframes, Entrée BBMA, Confiance, Jauge, Qualité (dernière colonne)."""
     rows = []
     for p in pairs:
@@ -230,7 +232,7 @@ def build_table(pairs, tfs, res, trends, feats, use_filter) -> str:
             code, direction = res[(p, t)]
             cells[t] = (code, direction)
             rsi_v = (feats.get((p, t)) or {}).get("rsi")
-            recent = (feats.get((p, t)) or {}).get("recent")
+            recent = (feats.get((p, t)) or {}).get("recent") if show_recent else None
             tf_tds.append(cell_html(code, direction, rsi_v, recent))
         d1 = trends.get(p)
         tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, d1)
@@ -262,17 +264,19 @@ def sidebar_settings():
 
     tfs = st.sidebar.multiselect("Timeframes", list(core.TFS), list(core.TFS))
     use_filter = st.sidebar.checkbox("Filtre D1 (EMA50)", True)
+    show_recent = st.sidebar.checkbox("Afficher les signaux récents (grisés)", False,
+                                      help="Dernier signal des bougies précédentes quand la dernière n'en a pas. Information seulement.")
     auto = st.sidebar.checkbox(f"Scan automatique toutes les {AUTO_REFRESH // 60} min", True)
     if st.sidebar.button("Rafraîchir"):
         st.cache_data.clear()
-    return pairs, tfs, use_filter, auto
+    return pairs, tfs, use_filter, auto, show_recent
 
 
 def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     st.title(APP_TITLE)
 
-    pairs, tfs, use_filter, auto = sidebar_settings()
+    pairs, tfs, use_filter, auto, show_recent = sidebar_settings()
     if not pairs or not tfs:
         st.info("Choisis au moins une paire et un timeframe dans la barre latérale.")
         st.stop()
@@ -288,8 +292,8 @@ def main():
                 "Clique sur Rafraîchir dans quelques instants."
             )
 
-        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter), unsafe_allow_html=True)
-        st.markdown(legend_html(), unsafe_allow_html=True)
+        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent), unsafe_allow_html=True)
+        st.markdown(legend_html(show_recent), unsafe_allow_html=True)
         suffix = " · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"
         st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC{suffix}")
 
