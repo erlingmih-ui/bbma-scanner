@@ -5,6 +5,8 @@ Règles (âge = maintenant - fermeture de la dernière bougie fermée) :
   - warn  : âge < max(24 h, 2 périodes) (week-end, fermeture de marché) ;
   - stale : au-delà, données à ne pas utiliser sans vérification.
 Le statut d'une paire est le plus mauvais de ses timeframes.
+La fermeture du week-end (vendredi 21 h -> dimanche 22 h UTC) est retirée de l'âge, sauf pour les
+actifs qui cotent en continu (CONTINUOUS, ex. BTCUSD) : un D1 de vendredi n'est pas périmé le lundi.
 Module ajouté au moteur existant : bbma_core.py n'est pas modifié.
 """
 import html
@@ -13,6 +15,9 @@ import pandas as pd
 
 BAR_MINUTES = {"M5": 5, "M15": 15, "H1": 60, "H4": 240, "D1": 1440, "W1": 10080, "MN": 43200}
 FLOOR = pd.Timedelta(hours=24)
+CONTINUOUS = {"BTCUSD"}                       # cotent 24 h/24 : pas de fermeture à retirer
+CLOSE_START = pd.Timedelta(days=4, hours=21)  # vendredi 21:00 UTC (depuis le lundi 00:00)
+CLOSE_END = pd.Timedelta(days=6, hours=22)    # dimanche 22:00 UTC
 RANK = {"ok": 0, "warn": 1, "stale": 2}
 LABEL = {"ok": "à jour", "warn": "en retard", "stale": "périmé", "none": "absent"}
 COLOR = {"ok": "#639922", "warn": "#BA7517", "stale": "#E24B4A", "none": "#787b86"}
@@ -22,11 +27,26 @@ def bar_length(tf):
     return pd.Timedelta(minutes=BAR_MINUTES.get(tf, 60))
 
 
-def status_tf(last_close, tf, now):
-    """('ok' | 'warn' | 'stale' | 'none', âge ou None)."""
+def closed_overlap(start, end):
+    """Durée de fermeture du week-end comprise entre start et end."""
+    total = pd.Timedelta(0)
+    monday = start.normalize() - pd.Timedelta(days=start.weekday())
+    while monday < end:
+        lo = max(start, monday + CLOSE_START)
+        hi = min(end, monday + CLOSE_END)
+        if hi > lo:
+            total += hi - lo
+        monday += pd.Timedelta(days=7)
+    return total
+
+
+def status_tf(last_close, tf, now, continuous=False):
+    """('ok' | 'warn' | 'stale' | 'none', âge ou None). L'âge exclut la fermeture du week-end."""
     if last_close is None:
         return "none", None
     age = now - last_close
+    if not continuous and age > pd.Timedelta(0):
+        age -= closed_overlap(last_close, now)
     length = bar_length(tf)
     if age < 2 * length:
         return "ok", age
@@ -50,7 +70,8 @@ def pair_status(pair, feats, tfs, now=None):
     now = now if now is not None else pd.Timestamp.now(tz="UTC")
     parts, known, missing = [], [], []
     for tf in tfs:
-        st, age = status_tf((feats.get((pair, tf)) or {}).get("last_close"), tf, now)
+        st, age = status_tf((feats.get((pair, tf)) or {}).get("last_close"), tf, now,
+                            continuous=pair in CONTINUOUS)
         if st == "none":
             missing.append(tf)
             continue
