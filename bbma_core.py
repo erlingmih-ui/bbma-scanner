@@ -38,6 +38,21 @@ DL_WORKERS = 6
 # Mettre False pour retrouver le comportement d'origine (bougie en formation incluse).
 D1_FILTER_CLOSED_ONLY = True
 
+# RE (Reentry) selon le guide BBMA OA :
+#   - armé par un CSAK ou MOM dans le sens de la tendance, désarmé par un signal contraire ;
+#   - retest = 1er chandelier qui revient dans la zone MA5/MA10 Low (achat) ou High (vente) depuis le bon côté ;
+#   - le premier retest consomme l'armement, confirmé ou non ;
+#   - confirmation = clôture du bon côté de la Mid BB (optionnelle, activable ici) ;
+#   - entrée recherchée sur le chandelier SUIVANT le retest confirmé.
+RE_USE_MID_BB = True
+# MHV : « Must have reverse candle » (sources TradingView / guide). Interprétation : la bougie MHV
+# doit être de sens contraire (achat : haussière ; vente : baissière). True = exigé.
+MHV_REQUIRE_REVERSE_CANDLE = True
+# HYPOTHÈSE non documentée (guide non trouvé) : après un premier retest non confirmé par la Mid BB,
+# un second retest reste-t-il possible tant que la tendance est valide ? False = comportement actuel
+# (le premier retest consomme l'armement).
+RE_SECOND_RETEST_IF_UNCONFIRMED = False
+
 # Cache disque des bougies : un fichier Parquet par (paire, intervalle), dans ./cache à côté de ce module.
 # Les bougies fermées sont conservées et s'accumulent d'un lancement à l'autre.
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
@@ -60,6 +75,47 @@ def wma(s, n):
     return pd.Series(out, index=s.index)
 
 
+def _reentry(c, h, l, mid, zl_b, zh_b, zl_s, zh_s, dir_b, dir_s):
+    """Reentry (RE) : (série buy, série sell) d'entrée, décalées d'une bougie.
+
+    Armé par un signal directionnel, consommé au premier retest. Le retest est validé si
+    la confirmation Mid BB (si RE_USE_MID_BB) est respectée ; l'entrée est sur la bougie suivante.
+    """
+    n = len(c)
+    C, H, L, MID = c.to_numpy(float), h.to_numpy(float), l.to_numpy(float), mid.to_numpy(float)
+    ZLB, ZHB = zl_b.to_numpy(float), zh_b.to_numpy(float)
+    ZLS, ZHS = zl_s.to_numpy(float), zh_s.to_numpy(float)
+    DB, DS = dir_b.to_numpy(bool), dir_s.to_numpy(bool)
+    confirm_b = np.zeros(n, bool)
+    confirm_s = np.zeros(n, bool)
+    armed_b = armed_s = False
+    for i in range(1, n):
+        # Retest achat : 1er retour dans la zone MA Low depuis le haut
+        if armed_b and C[i-1] > ZHB[i-1] and L[i] <= ZHB[i] and C[i] >= ZHB[i]:
+            # Retest touche la zone, clôture ne passe pas les MA5/MA10 Low
+            confirmed = (not RE_USE_MID_BB) or C[i] >= MID[i]
+            if confirmed:
+                confirm_b[i] = True
+            if confirmed or not RE_SECOND_RETEST_IF_UNCONFIRMED:
+                armed_b = False
+        # Retest vente : 1er retour dans la zone MA High depuis le bas
+        if armed_s and C[i-1] < ZLS[i-1] and H[i] >= ZLS[i] and C[i] <= ZLS[i]:
+            # Retest touche la zone, clôture ne passe pas les MA5/MA10 High
+            confirmed = (not RE_USE_MID_BB) or C[i] <= MID[i]
+            if confirmed:
+                confirm_s[i] = True
+            if confirmed or not RE_SECOND_RETEST_IF_UNCONFIRMED:
+                armed_s = False
+        # Armement par signal directionnel ; le sens opposé désarme
+        if DB[i]:
+            armed_b, armed_s = True, False
+        elif DS[i]:
+            armed_s, armed_b = True, False
+    re_b = pd.Series(np.roll(confirm_b, 1), index=c.index); re_b.iloc[0] = False
+    re_s = pd.Series(np.roll(confirm_s, 1), index=c.index); re_s.iloc[0] = False
+    return re_b, re_s
+
+
 def _signals(df, lb=15):
     """Signaux de toutes les bougies : {code: (série buy, série sell)}. Calcul causal (aucune donnée future)."""
     o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
@@ -72,8 +128,10 @@ def _signals(df, lb=15):
     exm_s, exm_b = h10 > top, l10 < low                                         # Extreme Magic (MA10)
     ext_s, ext_b = h5 > top, l5 < low                                           # Extreme (MA5)
     any_s, any_b = exm_s | ext_s, exm_b | ext_b
-    mhv_s = rec(any_s.shift(1), lb) & (h >= top) & (c < top)                    # MHV (fenêtre 15 bougies)
-    mhv_b = rec(any_b.shift(1), lb) & (l <= low) & (c > low)
+    rev_s = (c < o) if MHV_REQUIRE_REVERSE_CANDLE else True                     # bougie de renversement
+    rev_b = (c > o) if MHV_REQUIRE_REVERSE_CANDLE else True
+    mhv_s = rec(any_s.shift(1), lb) & (h >= top) & (c < top) & rev_s            # MHV (fenêtre 15 bougies)
+    mhv_b = rec(any_b.shift(1), lb) & (l <= low) & (c > low) & rev_b
     arah_s = (c < mid) & (c < l5) & (c < l10)                                   # CSAK / Candle Arah
     arah_b = (c > mid) & (c > h5) & (c > h10)
     # tendance mémorisée (m_lastTrendDir) : dernier MOM / Arah
@@ -82,17 +140,9 @@ def _signals(df, lb=15):
     zone_buy_hi, zone_buy_lo = np.maximum(l5, l10), np.minimum(l5, l10)
     zone_sell_hi, zone_sell_lo = np.maximum(h5, h10), np.minimum(h5, h10)
 
-    # RE strict (corrigé) : pullback depuis le bon côté de la zone.
-    # Achat : bougie précédente AU-DESSUS de la zone, bougie actuelle DANS la zone.
-    # Vente : bougie précédente EN DESSOUS de la zone, bougie actuelle DANS la zone.
-    re_b = ((trend == 1)
-            & (c.shift(1) > zone_buy_hi.shift(1))
-            & (c >= zone_buy_lo) & (c <= zone_buy_hi)
-            & (l <= zone_buy_hi))
-    re_s = ((trend == -1)
-            & (c.shift(1) < zone_sell_lo.shift(1))
-            & (c >= zone_sell_lo) & (c <= zone_sell_hi)
-            & (h >= zone_sell_lo))
+    # RE : machine à états (voir _reentry et RE_USE_MID_BB)
+    re_b, re_s = _reentry(c, h, l, mid, zone_buy_lo, zone_buy_hi, zone_sell_lo, zone_sell_hi,
+                          mom_b | arah_b, mom_s | arah_s)
 
     return {"MOM": (mom_b, mom_s), "EXM": (exm_b, exm_s), "EXT": (ext_b, ext_s),
             "MHV": (mhv_b, mhv_s), "CSAK": (arah_b, arah_s), "RE": (re_b, re_s)}
