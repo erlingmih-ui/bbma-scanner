@@ -1,8 +1,8 @@
 """Badge de fraîcheur : âge de la dernière bougie fermée, par paire et par timeframe.
 
 Règles (âge = maintenant - fermeture de la dernière bougie fermée) :
-  - ok    : âge < 2 périodes du timeframe ;
-  - warn  : âge < max(24 h, 2 périodes) (week-end, fermeture de marché) ;
+  - ok    : âge < 2 périodes du timeframe + DATA_DELAY (délai habituel des données yfinance) ;
+  - warn  : âge < max(24 h, 2 périodes + DATA_DELAY) (week-end, fermeture de marché) ;
   - stale : au-delà, données à ne pas utiliser sans vérification.
 Le statut d'une paire est le plus mauvais de ses timeframes.
 La fermeture du week-end (vendredi 21 h -> dimanche 22 h UTC) est retirée de l'âge, sauf pour les
@@ -15,6 +15,7 @@ import pandas as pd
 
 BAR_MINUTES = {"M5": 5, "M15": 15, "H1": 60, "H4": 240, "D1": 1440, "W1": 10080, "MN": 43200}
 FLOOR = pd.Timedelta(hours=24)
+DATA_DELAY = pd.Timedelta(minutes=15)         # tolérance : yfinance diffuse certains actifs (ex. GC=F) avec ~10 min de retard
 CONTINUOUS = {"BTCUSD"}                       # cotent 24 h/24 : pas de fermeture à retirer
 CLOSE_START = pd.Timedelta(days=4, hours=21)  # vendredi 21:00 UTC (depuis le lundi 00:00)
 CLOSE_END = pd.Timedelta(days=6, hours=22)    # dimanche 22:00 UTC
@@ -48,9 +49,9 @@ def status_tf(last_close, tf, now, continuous=False):
     if not continuous and age > pd.Timedelta(0):
         age -= closed_overlap(last_close, now)
     length = bar_length(tf)
-    if age < 2 * length:
+    if age < 2 * length + DATA_DELAY:
         return "ok", age
-    if age < max(FLOOR, 2 * length):
+    if age < max(FLOOR, 2 * length + DATA_DELAY):
         return "warn", age
     return "stale", age
 
