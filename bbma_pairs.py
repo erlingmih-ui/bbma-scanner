@@ -130,12 +130,13 @@ def selector(text_pairs):
     """
     use_list = st.sidebar.checkbox(
         "Choisir dans la liste", key=CHECK_KEY,
-        help="Coché : vous choisissez les paires dans « Paires disponibles ». La zone « Paires (max 12) » est alors ignorée. "
-             "Décoché : vous saisissez les paires dans la zone « Paires (max 12) ». Votre choix ne concerne que vous.")
+        help="Coché : vous choisissez les paires dans « Paires disponibles », à partir des paires par défaut. "
+             "La zone « Paires à ajouter » est alors ignorée. Décoché : les paires par défaut sont scannées, "
+             "et vous ajoutez les vôtres dans « Paires à ajouter ». Votre choix ne concerne que vous.")
     if not use_list:
-        st.sidebar.caption("Mode actif : saisie libre. Écrivez les paires dans la zone « Paires (max 12) », séparées par un espace.")
+        st.sidebar.caption("Mode actif : saisie. Les 12 paires par défaut sont scannées ; ajoutez les vôtres dans « Paires à ajouter ».")
         return text_pairs
-    st.sidebar.caption("Mode actif : liste. La zone « Paires (max 12) » est ignorée ; choisissez les paires ci-dessous.")
+    st.sidebar.caption("Mode actif : liste. La zone « Paires à ajouter » est ignorée ; choisissez les paires ci-dessous.")
 
     options = list(PAIR_CHOICES) + [p for p in text_pairs if p not in PAIR_CHOICES]
 

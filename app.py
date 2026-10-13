@@ -16,6 +16,7 @@ import bbma_core as core
 import bbma_fresh as bf
 import bbma_session as bs
 import bbma_gauge as bg
+import bbma_nuclear as bn
 import bbma_pairs as bp
 import bbma_quality as bq
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
@@ -26,13 +27,14 @@ APP_TITLE = "BBMA OA MTF Scanner"
 DEFAULT_PAIRS = "EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF NZDUSD EURJPY GBPJPY EURGBP XAUUSD BTCUSD"
 MAX_PAIRS = 12
 CACHE_TTL = 240          # secondes ; inférieur à AUTO_REFRESH pour qu'un vrai scan ait lieu à chaque cycle
-SCAN_VERSION = 4         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
+SCAN_VERSION = 5         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
 AUTO_REFRESH = 300       # secondes entre deux scans automatiques
 RSI_LOW, RSI_HIGH = 30, 70   # repères visuels uniquement (couleur), aucun effet sur les signaux
 
 STRONG_CODES = {"MOM", "EXM", "EXT"}   # signaux affichés en gras (trait latéral)
 TPW_CODES = {"EXM", "EXT"}             # signaux pour lesquels le flag TP Wajib est affiché
 ARROW = {"B": "▲", "S": "▼"}
+QUAL_RANK = {"A": 3, "B": 2, "C": 1}   # tri des lignes (Qualité BBMA)
 NAMES = {
     "MOM": "Momentum",
     "EXM": "Extreme Magic (MA10)",
@@ -196,14 +198,18 @@ table.bb td.conf.high{background:#26a69a;color:#fff}
 table.bb td.conf.mid{background:#2962ff;color:#fff}
 table.bb td.conf.low,table.bb td.conf.none{background:#2a2e39;color:#787b86}
 /* Jauge Buy / Sell */
-table.bb td.gauge{min-width:130px;padding:8px 12px}
+table.bb td.gauge{min-width:65px;max-width:80px;padding:8px 6px}
 table.bb td.gauge.none{background:#2a2e39;color:#787b86}
 table.bb .gbar{position:relative;height:8px;border-radius:4px;background:linear-gradient(90deg,#ef5350,#2a2e39 50%,#26a69a)}
 table.bb .gpt{position:absolute;top:-3px;width:4px;height:14px;border-radius:2px;background:#fff;transform:translateX(-50%)}
-table.bb .glab{margin-top:5px;font-size:11px;font-weight:700}
+table.bb .glab{margin-top:4px;font-size:10px;font-weight:700}
 table.bb .glab.buy{color:#26a69a}
 table.bb .glab.sell{color:#ef5350}
 table.bb .glab.neutral{color:#787b86}
+/* Nuclear (direction, score, timeframes ; couleur et intensité posées en ligne) */
+table.bb td.nuc{font-weight:700;font-size:12px;min-width:90px;max-width:120px;white-space:normal}
+table.bb td.nuc.none{background:#2a2e39;color:#787b86}
+table.bb td.nuc .ntf{font-size:10px;font-weight:500;margin-top:2px;opacity:.9;line-height:1.3}
 /* Qualité de l'entrée (dernière colonne) */
 table.bb td.qual{font-weight:700;font-size:14px;min-width:80px}
 table.bb td.qual.A{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166,154,.55)}
@@ -227,7 +233,7 @@ table.bb tr:first-child th.pair{left:0;z-index:5}
 def run_scan(pairs: tuple, tfs: tuple, version: int, nonce: int = 0):
     """Scan complet (signaux, tendances D1, RSI, ATR), mis en cache.
     Retourne (res, trends, failed, total, ts, feats) ; feats contient le RSI et la distance ATR par (paire, TF)."""
-    return bq.scan_quality(pairs, tfs, trend=True)   # version : fait partie de la clé de cache
+    return bn.scan_full(pairs, tfs, trend=True)   # version : fait partie de la clé de cache
 
 
 def rsi_html(value) -> str:
@@ -285,9 +291,11 @@ def conf_cell(score) -> str:
     return f'<td class="conf s2 {cls}">{pct}%</td>'
 
 
-def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False) -> str:
-    """Tableau unique : Pair, timeframes, Entrée BBMA, Confiance, Jauge, Qualité (dernière colonne)."""
-    rows = []
+def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None) -> str:
+    """Tableau : Pair, timeframes, Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
+    Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
+    nuc = nuc or {}
+    entries = []
     for p in pairs:
         cells, tf_tds = {}, []
         for t in tfs:
@@ -304,15 +312,21 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False) -
             code_e, sens_e, score, d1, feats.get((p, tf_e)))
         kind = bs.entry_kind(cells, tfs, tf_e, code_e)
         q_score, q_grade = bs.cap_grade(q_score, q_grade, kind)
+        n = nuc.get(p)
         tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind), conf_cell(score),
-                        bg.gauge_cell(gauge), bq.qual_cell(q_score, q_grade, q_detail)]
+                        bg.gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail)]
         fr_status, fr_tip = bf.pair_status(p, feats, tfs)
-        rows.append(f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>')
+        row = f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>'
+        force, nscore = bn.sort_key(n)
+        key = (force, nscore, QUAL_RANK.get(q_grade, 0), score if score is not None else -1)
+        entries.append((key, row))
+    entries.sort(key=lambda e: e[0], reverse=True)
+    rows = [row for _, row in entries]
 
     head = ('<tr><th class="pair">Pair</th>'
             + "".join(f"<th>{t}</th>" for t in tfs)
             + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th>'
-            + '<th class="s4 hmtf">Jauge</th><th class="s3 hmtf">Qualité</th></tr>')
+            + '<th class="s4 hmtf">Jauge</th><th class="s4 hmtf">Nuclear</th><th class="s3 hmtf">Qualité</th></tr>')
     return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
 
 
@@ -384,7 +398,7 @@ def main():
     @st.fragment(run_every=AUTO_REFRESH if auto else None)   # ne relance que cette partie
     def live():
         with st.spinner("Scan en cours..."):
-            res, trends, failed, total, ts, feats = run_scan(
+            res, trends, failed, total, ts, feats, nuc = run_scan(
                 tuple(pairs), tuple(tfs), SCAN_VERSION, st.session_state.get("refresh_nonce", 0))
 
         if failed:
@@ -393,7 +407,7 @@ def main():
                 "Clique sur Rafraîchir dans quelques instants."
             )
 
-        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent), unsafe_allow_html=True)
+        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc), unsafe_allow_html=True)
         legend_open = st.session_state.get("show_legend", False)
         st.button("Masquer la légende" if legend_open else "Afficher la légende",
                   key="btn_legend", on_click=_toggle_legend)
