@@ -72,22 +72,21 @@ def legend_html(show_recent=False) -> str:
     return (
         '<div class="bb-legend">'
         '<h4>Choix des paires</h4>'
-        '<div><b>Mode saisie libre</b> (case « Choisir dans la liste » décochée) : écrivez les paires dans la zone '
-        '« Paires (max 12) », séparées par un espace, par exemple <b>EURUSD GBPUSD USDJPY</b>. Validez avec '
-        'Ctrl+Entrée ou en cliquant ailleurs.</div>'
-        '<div><b>Mode liste</b> (case cochée) : la zone de texte est ignorée. Choisissez les paires dans '
-        '« Paires disponibles ».</div>'
-        '<div><b>1.</b> Cochez <b>Choisir dans la liste</b> dans la barre latérale.</div>'
-        '<div><b>2.</b> Pour <b>ajouter</b> une paire : cliquez dans « Paires disponibles », tapez son nom '
-        '(ex. AUDJPY) et sélectionnez-la.</div>'
-        '<div><b>3.</b> Pour <b>retirer</b> une paire : cliquez sur son × dans la liste.</div>'
-        '<div><b>4.</b> Pour revenir aux paires d’origine : cliquez sur <b>Réinitialiser (paires par défaut)</b>.</div>'
-        f'<div class="note">Limite : {MAX_PAIRS} paires. Si la limite est atteinte, retirez d’abord une paire '
-        'avant d’en ajouter une.</div>'
-        '<div class="note">Les 12 paires par défaut sont proposées en premier. Quand la case est cochée, la zone '
-        '« Paires (max 12) » est ignorée ; décochez-la pour revenir à la saisie libre.</div>'
-        '<div class="note">Votre choix ne concerne que vous. Il est conservé d’une visite à l’autre si votre compte '
-        'est identifié ; sinon il est perdu au rechargement de la page.</div>'
+        '<div><b>Mode saisie</b> (case « Choisir dans la liste » décochée) : les <b>12 paires par défaut</b> sont '
+        'toujours scannées. Pour en <b>ajouter</b>, écrivez-les dans la zone <b>« Paires à ajouter »</b>, séparées '
+        'par un espace, par exemple <b>AUDJPY CHFJPY</b>. Validez avec Ctrl+Entrée ou en cliquant ailleurs.</div>'
+        '<div><b>Mode liste</b> (case cochée) : la zone « Paires à ajouter » est ignorée. Choisissez les paires '
+        'dans « Paires disponibles », à partir des 12 paires par défaut.</div>'
+        '<div><b>1.</b> Pour <b>ajouter</b> une paire en mode saisie : écrivez son nom dans « Paires à ajouter ».</div>'
+        '<div><b>2.</b> Pour <b>choisir</b> librement : cochez <b>Choisir dans la liste</b>, puis cliquez dans '
+        '« Paires disponibles » et sélectionnez les paires voulues.</div>'
+        '<div><b>3.</b> Pour <b>retirer</b> une paire ajoutée : effacez-la de la zone « Paires à ajouter ».</div>'
+        '<div><b>4.</b> Pour revenir au réglage d’origine : cliquez sur <b>Réinitialiser (paires par défaut)</b> '
+        '(mode liste) ou videz « Paires à ajouter » (mode saisie).</div>'
+        f'<div class="note">Limite : {MAX_PAIRS} paires au total. Les paires ajoutées passent avant les paires par '
+        f'défaut : si vous en ajoutez, les dernières paires par défaut sont retirées pour rester à {MAX_PAIRS}.</div>'
+        '<div class="note">Votre choix en mode liste ne concerne que vous. Il est conservé d’une visite à l’autre si '
+        'votre compte est identifié ; sinon il est perdu au rechargement de la page.</div>'
         '<h4>Direction</h4>'
         '<div class="chips"><span class="chip buy">▲ Buy</span><span class="chip sell">▼ Sell</span>'
         '<span class="chip tp">TPW = TP Wajib (avec EXM / EXT)</span></div>'
@@ -302,16 +301,23 @@ def _toggle_legend():
 
 def sidebar_settings():
     """Affiche la barre latérale et retourne les paramètres choisis."""
+    base = DEFAULT_PAIRS.split()                       # les 12 paires par défaut, toujours scannées
     raw = st.sidebar.text_area(
-        f"Paires (max {MAX_PAIRS})", DEFAULT_PAIRS,
-        placeholder="Exemple : EURUSD GBPUSD USDJPY",
-        help="Saisie libre : écrivez les paires en les séparant par un espace, par exemple EURUSD GBPUSD USDJPY. "
-             "Validez avec Ctrl+Entrée ou en cliquant ailleurs. Cette zone est ignorée quand « Choisir dans la liste » est coché.")
-    pairs = list(dict.fromkeys(raw.upper().split()))   # dédoublonnage en conservant l'ordre
-    if len(pairs) > MAX_PAIRS:
-        st.sidebar.warning(f"Limité aux {MAX_PAIRS} premières paires.")
-        pairs = pairs[:MAX_PAIRS]
-    pairs = bp.selector(pairs)   # AJOUT : case « Choisir dans la liste » (propre à chaque utilisateur)
+        f"Paires à ajouter (max {MAX_PAIRS})", "",
+        placeholder="Exemple : AUDJPY CHFJPY",
+        help="Ces paires s’ajoutent aux 12 paires par défaut. Écrivez-les en les séparant par un espace, "
+             "par exemple AUDJPY CHFJPY. Validez avec Ctrl+Entrée ou en cliquant ailleurs. "
+             "Cette zone est ignorée quand « Choisir dans la liste » est coché.")
+    extra = [p for p in dict.fromkeys(raw.upper().split()) if p not in base]   # sans doublons ni défauts
+    if len(extra) > MAX_PAIRS:
+        st.sidebar.warning(f"Limité aux {MAX_PAIRS} premières paires à ajouter.")
+        extra = extra[:MAX_PAIRS]
+    # Total limité à MAX_PAIRS : les paires ajoutées sont prioritaires, les dernières paires par défaut cèdent leur place.
+    kept = base[:MAX_PAIRS - len(extra)]
+    if len(kept) < len(base):
+        st.sidebar.info(f"Limite de {MAX_PAIRS} paires : {len(base) - len(kept)} paire(s) par défaut retirée(s) "
+                        f"({', '.join(base[len(kept):])}).")
+    pairs = bp.selector(kept + extra)   # case « Choisir dans la liste » (propre à chaque utilisateur)
 
     tfs = st.sidebar.multiselect("Timeframes", list(core.TFS), list(core.TFS))
     use_filter = st.sidebar.checkbox("Filtre D1 (EMA50)", True)
