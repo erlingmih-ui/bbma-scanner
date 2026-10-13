@@ -198,18 +198,18 @@ table.bb td.conf.high{background:#26a69a;color:#fff}
 table.bb td.conf.mid{background:#2962ff;color:#fff}
 table.bb td.conf.low,table.bb td.conf.none{background:#2a2e39;color:#787b86}
 /* Jauge Buy / Sell */
-table.bb td.gauge{min-width:65px;max-width:80px;padding:8px 6px}
+table.bb td.gauge{min-width:96px;max-width:116px;padding:8px 8px}
 table.bb td.gauge.none{background:#2a2e39;color:#787b86}
-table.bb .gbar{position:relative;height:8px;border-radius:4px;background:linear-gradient(90deg,#ef5350,#2a2e39 50%,#26a69a)}
+table.bb .gbar{position:relative;height:10px;border-radius:4px;background:linear-gradient(90deg,#ef5350,#2a2e39 50%,#26a69a)}
 table.bb .gpt{position:absolute;top:-3px;width:4px;height:14px;border-radius:2px;background:#fff;transform:translateX(-50%)}
-table.bb .glab{margin-top:4px;font-size:10px;font-weight:700}
+table.bb .glab{margin-top:5px;font-size:12px;font-weight:700}
 table.bb .glab.buy{color:#26a69a}
 table.bb .glab.sell{color:#ef5350}
 table.bb .glab.neutral{color:#787b86}
 /* Nuclear (direction, score, timeframes ; couleur et intensité posées en ligne) */
-table.bb td.nuc{font-weight:700;font-size:12px;min-width:90px;max-width:120px;white-space:normal}
+table.bb td.nuc{font-weight:700;font-size:13px;min-width:112px;max-width:140px;padding:8px 10px;white-space:normal;line-height:1.3}
 table.bb td.nuc.none{background:#2a2e39;color:#787b86}
-table.bb td.nuc .ntf{font-size:10px;font-weight:500;margin-top:2px;opacity:.9;line-height:1.3}
+table.bb td.nuc .ntf{font-size:12px;font-weight:600;margin-top:3px;opacity:1}
 /* Qualité de l'entrée (dernière colonne) */
 table.bb td.qual{font-weight:700;font-size:14px;min-width:80px}
 table.bb td.qual.A{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166,154,.55)}
