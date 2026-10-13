@@ -4,6 +4,7 @@
     "UTC"  : 00, 04, 08... UTC (comportement actuel de bbma_core)
     "NY17" : 17 h, 21 h, 01 h... heure de New York (clôture forex usuelle)
   Mettre la valeur qui correspond au graphique de votre broker.
+- Le H4 n'a qu'un seul chemin : core.resample_tf -> resample_h4 (scan, qualité et backtest).
 - entry_kind distingue un vrai pullback (signal d'entrée sur un TF inférieur) d'une poursuite
   (le TF directeur sert d'entrée, faute de TF d'entrée). Une poursuite ne peut pas être grade A.
 Module ajouté : bbma_core.py n'est pas modifié.
@@ -26,14 +27,9 @@ def resample_h4(df1h, session=H4_SESSION):
 
 
 def closed_bars(pair, tf, data):
-    """Comme core._closed_bars, mais le H4 respecte H4_SESSION. None si indisponible."""
-    if tf != "H4":
-        return core._closed_bars(pair, tf, data)
-    raw = data.get((pair, core.TFS["H4"][0], core.TFS["H4"][1]))
-    if raw is None:
-        return None
-    df = resample_h4(raw).iloc[:-1]          # la bougie H4 en cours n'est pas fermée
-    return df if len(df) >= core.MIN_BARS else None
+    """Bougies fermées d'une paire sur un TF. Chemin unique : core._closed_bars passe par core.resample_tf,
+    qui appelle resample_h4 (ancre H4_SESSION) pour le H4 : scan, qualité et backtest voient les mêmes bougies."""
+    return core._closed_bars(pair, tf, data)
 
 
 def entry_kind(cells, tf_dispo, tf_e, code_e):
@@ -43,8 +39,10 @@ def entry_kind(cells, tf_dispo, tf_e, code_e):
     tfs_ord = [t for t in core.TF_ORDER if t in tf_dispo]
     idx = next((i for i, t in enumerate(tfs_ord)
                 if cells.get(t, (None, None))[0] in core.SIG_DIRECTEUR), None)
-    if idx is None:
-        return None
+    if idx is None:       # pas de structure : setup de retournement Extreme -> MHV
+        idx = next((i for i, t in enumerate(tfs_ord)
+                    if cells.get(t, (None, None))[0] in core.SIG_REVERSAL), None)
+        return None if idx is None else "retournement"
     return "poursuite" if tf_e == tfs_ord[idx] else "pullback"
 
 

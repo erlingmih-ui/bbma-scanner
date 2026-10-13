@@ -17,6 +17,7 @@ import bbma_fresh as bf
 import bbma_session as bs
 import bbma_gauge as bg
 import bbma_quality as bq
+import bbma_welcome as welcome
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
@@ -25,11 +26,11 @@ APP_TITLE = "BBMA OA MTF Scanner"
 DEFAULT_PAIRS = "EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF NZDUSD EURJPY GBPJPY EURGBP XAUUSD BTCUSD"
 MAX_PAIRS = 12
 CACHE_TTL = 240          # secondes ; inférieur à AUTO_REFRESH pour qu'un vrai scan ait lieu à chaque cycle
-SCAN_VERSION = 4         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
+SCAN_VERSION = 6         # à incrémenter quand la logique de détection ou la structure de feats change : invalide le cache
 AUTO_REFRESH = 300       # secondes entre deux scans automatiques
 RSI_LOW, RSI_HIGH = 30, 70   # repères visuels uniquement (couleur), aucun effet sur les signaux
 
-STRONG_CODES = {"MOM", "EXM", "EXT"}   # signaux affichés en gras (trait latéral)
+STRONG_CODES = {"MOM"}   # signaux affichés en gras (trait latéral)
 TPW_CODES = {"EXM", "EXT"}             # signaux pour lesquels le flag TP Wajib est affiché
 ARROW = {"B": "▲", "S": "▼"}
 NAMES = {
@@ -38,7 +39,8 @@ NAMES = {
     "EXT": "Extreme (MA5)",
     "MHV": "Market Hilang Volume",
     "CSAK": "Candle Arah Kukuh",
-    "RE": "Reentry",
+    "RE": "Reentry (zone MA5/10)",
+    "REM": "Reentry (MID BB)",
 }
 LEGEND_CSS = """
 .bb-legend{margin-top:14px;background:#1e222d;border:1px solid #2a2e39;border-radius:14px;padding:14px 16px;font:13px/1.5 -apple-system,"Trebuchet MS",Roboto,sans-serif;color:#b2b5be}
@@ -61,28 +63,33 @@ LEGEND_CSS = """
 """
 
 
-def legend_html(show_recent=False) -> str:
+def legend_html(show_recent=False, cycle=True) -> str:
     """Légende organisée par sections, avec les mêmes couleurs que le tableau."""
     recent_note = ('<div class="note">Texte grisé « CODE ▲ −n » : la dernière bougie n’a pas de signal ; c’est le dernier signal, '
                    'n bougies plus tôt (information seulement, non utilisé par la synthèse).</div>') if show_recent else ""
     sigs = [("MOM", "Momentum"), ("EXM", "Extreme Magic (MA10)"), ("EXT", "Extreme (MA5)"),
-            ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh"), ("RE", "Reentry (strict)")]
+            ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh"), ("RE", "Reentry (zone MA5/10)"), ("REM", "Reentry (MID BB)")]
     sigs_html = "".join(f"<div><b>{code}</b> · {name}</div>" for code, name in sigs)
+    cycle_note = ('<div class="note">Cycle BBMA actif (machine à états par TF) : Extreme → MHV → CSAK → MOM → RE. '
+                  'Un code n’apparaît que s’il découle de l’étape précédente (CSAK : première clôture au-delà de la MID et des MA5/10, '
+                  f'dans les {core.CSAK_WINDOW} bougies après le MHV) ; cycle annulé si la MID BB est franchie. '
+                  'EXM / EXT = alerte TP et armement d’un MHV, pas une direction.</div>') if cycle else ""
     return (
         '<div class="bb-legend">'
         '<h4>Direction</h4>'
         '<div class="chips"><span class="chip buy">▲ Buy</span><span class="chip sell">▼ Sell</span>'
         '<span class="chip tp">TPW = TP Wajib (avec EXM / EXT)</span></div>'
         '<h4>Signaux</h4><div class="sigs">' + sigs_html + '</div>'
-        + recent_note +
+        + cycle_note + recent_note +
         '<h4>Fraîcheur des données</h4>'
         '<div class="chips"><span class="chip buy">● à jour</span><span class="chip mid">● en retard</span>'
         '<span class="chip sell">● périmé</span></div>'
         '<div class="note">Pastille à côté de chaque paire : âge de la dernière bougie fermée, le pire timeframe compte. Détail au survol.</div>'
         '<h4>Entrée BBMA</h4>'
-        '<div class="chips"><span class="chip buy">pullback</span><span class="chip mid">poursuite</span></div>'
+        '<div class="chips"><span class="chip buy">pullback</span><span class="chip mid">poursuite</span><span class="chip qb">retournement</span></div>'
         '<div class="note">Pullback : retour vers la zone MA, avec un signal d’entrée sur un TF inférieur. Poursuite : le TF directeur sert d’entrée, prix déjà étendu, grade plafonné à B. H4 ancré sur : ' + bs.H4_SESSION + '.</div>'
-        '<div>TF directeur (MOM / EXM / EXT / RE) + TF d’entrée plus bas (RE / MHV / CSAK / EXT) dans le même sens. '
+        '<div>TF directeur (MOM / RE / REM) + TF d’entrée plus bas (RE / REM / MHV / CSAK) dans le même sens. '
+        'Sans structure : setup de retournement Extreme → MHV (filtre D1 désactivé). '
         'Annulé si un TF supérieur contredit, ou si le sens va contre le filtre D1 (clôture vs EMA50).</div>'
         '<h4>Confiance</h4>'
         '<div class="chips"><span class="chip buy">≥ 70 %</span><span class="chip mid">40 – 69 %</span>'
@@ -134,6 +141,7 @@ table.bb td.synth.none{background:#2a2e39;color:#787b86}
 table.bb td.synth.buy{background:#26a69a;color:#fff;box-shadow:0 0 14px rgba(38,166,154,.55)}
 table.bb td.synth.sell{background:#ef5350;color:#fff;box-shadow:0 0 14px rgba(239,83,80,.55)}
 table.bb td.synth.chase{background:#BA7517;color:#fff;box-shadow:none}
+table.bb td.synth.rev{background:#2962ff;color:#fff;box-shadow:none}
 table.bb td.synth .kind{font-size:10px;font-weight:500;margin-top:2px;opacity:.9}
 /* Confiance (part des TF en confluence) */
 table.bb td.conf{font-weight:700;font-size:14px;min-width:70px}
@@ -169,10 +177,10 @@ table.bb tr:first-child th.pair{left:0;z-index:5}
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def run_scan(pairs: tuple, tfs: tuple, version: int):
+def run_scan(pairs: tuple, tfs: tuple, version: int, cycle: bool):
     """Scan complet (signaux, tendances D1, RSI, ATR), mis en cache.
     Retourne (res, trends, failed, total, ts, feats) ; feats contient le RSI et la distance ATR par (paire, TF)."""
-    return bq.scan_quality(pairs, tfs, trend=True)   # version : fait partie de la clé de cache
+    return bq.scan_quality(pairs, tfs, trend=True, cycle=cycle)   # version et cycle : font partie de la clé de cache
 
 
 def rsi_html(value) -> str:
@@ -211,12 +219,15 @@ def synth_cell(tf, code, direction, kind=None) -> str:
         return '<td class="synth s1 none">–</td>'
     cls = "buy" if direction == "B" else "sell"
     side = "Buy" if direction == "B" else "Sell"
-    label = {"pullback": "pullback", "poursuite": "poursuite"}.get(kind, "")
+    label = {"pullback": "pullback", "poursuite": "poursuite", "retournement": "retournement"}.get(kind, "")
     if kind == "poursuite":
         cls += " chase"
+    elif kind == "retournement":
+        cls += " rev"
     tip = f"Entrée {tf} · {NAMES.get(code, code)} · {side}"
     if label:
-        tip += " · " + ("retour vers la zone MA" if kind == "pullback" else "prix déjà étendu, grade plafonné à B")
+        tip += " · " + {"pullback": "retour vers la zone MA", "retournement": "Extreme → MHV, contre-tendance D1 admise",
+                        "poursuite": "prix déjà étendu, grade plafonné à B"}[kind]
     tag = f'<div class="kind">{label}</div>' if label else ""
     return f'<td class="synth s1 {cls}" title="{tip}"><b>{tf}</b> {code} {ARROW[direction]}{tag}</td>'
 
@@ -294,17 +305,23 @@ def sidebar_settings():
     use_filter = st.sidebar.checkbox("Filtre D1 (EMA50)", True)
     show_recent = st.sidebar.checkbox("Afficher les signaux récents (grisés)", False,
                                       help="Dernier signal des bougies précédentes quand la dernière n'en a pas. Information seulement.")
+    cycle = st.sidebar.checkbox("Cycle BBMA strict", core.CSAK_CYCLE_ONLY,
+                                help="Actif : machine à états Extreme → MHV → CSAK → MOM → RE ; un code n'apparaît que s'il découle de l'étape précédente. "
+                                     "Désactivé : conditions brutes sans chaînage.")
     auto = st.sidebar.checkbox(f"Scan automatique toutes les {AUTO_REFRESH // 60} min", True)
     if st.sidebar.button("Rafraîchir"):
         st.cache_data.clear()
-    return pairs, tfs, use_filter, auto, show_recent
+    return pairs, tfs, use_filter, auto, show_recent, cycle
 
 
 def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
+    if not welcome.passed():          # page d'accueil, une fois par session
+        welcome.render()
+        st.stop()
     st.title(APP_TITLE)
 
-    pairs, tfs, use_filter, auto, show_recent = sidebar_settings()
+    pairs, tfs, use_filter, auto, show_recent, cycle = sidebar_settings()
     if not pairs or not tfs:
         st.info("Choisis au moins une paire et un timeframe dans la barre latérale.")
         st.stop()
@@ -312,7 +329,7 @@ def main():
     @st.fragment(run_every=AUTO_REFRESH if auto else None)   # ne relance que cette partie
     def live():
         with st.spinner("Scan en cours..."):
-            res, trends, failed, total, ts, feats = run_scan(tuple(pairs), tuple(tfs), SCAN_VERSION)
+            res, trends, failed, total, ts, feats = run_scan(tuple(pairs), tuple(tfs), SCAN_VERSION, cycle)
 
         if failed:
             st.warning(
@@ -325,7 +342,7 @@ def main():
         st.button("Masquer la légende" if legend_open else "Afficher la légende",
                   key="btn_legend", on_click=_toggle_legend)
         if legend_open:
-            st.markdown(legend_html(show_recent), unsafe_allow_html=True)
+            st.markdown(legend_html(show_recent, cycle), unsafe_allow_html=True)
         suffix = " · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"
         st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC{suffix}")
         st.markdown(DISCLAIMER_CSS + DISCLAIMER_HTML, unsafe_allow_html=True)
