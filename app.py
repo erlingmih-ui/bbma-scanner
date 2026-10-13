@@ -16,6 +16,7 @@ import bbma_core as core
 import bbma_fresh as bf
 import bbma_session as bs
 import bbma_gauge as bg
+import bbma_pairs as bp
 import bbma_quality as bq
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
 
@@ -169,7 +170,7 @@ table.bb tr:first-child th.pair{left:0;z-index:5}
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def run_scan(pairs: tuple, tfs: tuple, version: int):
+def run_scan(pairs: tuple, tfs: tuple, version: int, nonce: int = 0):
     """Scan complet (signaux, tendances D1, RSI, ATR), mis en cache.
     Retourne (res, trends, failed, total, ts, feats) ; feats contient le RSI et la distance ATR par (paire, TF)."""
     return bq.scan_quality(pairs, tfs, trend=True)   # version : fait partie de la clé de cache
@@ -289,6 +290,7 @@ def sidebar_settings():
     if len(pairs) > MAX_PAIRS:
         st.sidebar.warning(f"Limité aux {MAX_PAIRS} premières paires.")
         pairs = pairs[:MAX_PAIRS]
+    pairs = bp.selector(pairs)   # AJOUT : case « Choisir dans la liste » (propre à chaque utilisateur)
 
     tfs = st.sidebar.multiselect("Timeframes", list(core.TFS), list(core.TFS))
     use_filter = st.sidebar.checkbox("Filtre D1 (EMA50)", True)
@@ -296,7 +298,7 @@ def sidebar_settings():
                                       help="Dernier signal des bougies précédentes quand la dernière n'en a pas. Information seulement.")
     auto = st.sidebar.checkbox(f"Scan automatique toutes les {AUTO_REFRESH // 60} min", True)
     if st.sidebar.button("Rafraîchir"):
-        st.cache_data.clear()
+        st.session_state["refresh_nonce"] = st.session_state.get("refresh_nonce", 0) + 1
     return pairs, tfs, use_filter, auto, show_recent
 
 
@@ -312,7 +314,8 @@ def main():
     @st.fragment(run_every=AUTO_REFRESH if auto else None)   # ne relance que cette partie
     def live():
         with st.spinner("Scan en cours..."):
-            res, trends, failed, total, ts, feats = run_scan(tuple(pairs), tuple(tfs), SCAN_VERSION)
+            res, trends, failed, total, ts, feats = run_scan(
+                tuple(pairs), tuple(tfs), SCAN_VERSION, st.session_state.get("refresh_nonce", 0))
 
         if failed:
             st.warning(
