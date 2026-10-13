@@ -125,6 +125,44 @@ def legend_html(show_recent=False) -> str:
     )
 
 
+def guide_html() -> str:
+    """Guide de lecture pour la décision d'achat ou de vente. Informatif : ce n'est pas un conseil."""
+    return (
+        '<div class="bb-legend">'
+        '<h4>Guide de décision (informatif, pas un conseil)</h4>'
+        '<div>Ce guide résume comment lire le tableau avant de décider un achat ou une vente. '
+        'Le scanner ne fixe ni point d’entrée, ni stop, ni objectif : la décision et le risque restent les vôtres.</div>'
+        '<h4>1. Y a-t-il une entrée ?</h4>'
+        '<div>La colonne <b>Entrée BBMA</b> est remplie : une entrée est détectée. Un « – » signifie qu’il n’y a '
+        'aucune décision à prendre sur cette paire.</div>'
+        '<h4>2. Quel sens ?</h4>'
+        '<div><span class="chip buy">▲ Achat</span> si le signal est haussier, <span class="chip sell">▼ Vente</span> '
+        's’il est baissier. Le sens doit rester cohérent avec la <b>Jauge</b> et le filtre <b>D1</b>.</div>'
+        '<h4>3. Quelle nature d’entrée ?</h4>'
+        '<div><span class="chip buy">pullback</span> : retour vers la zone des moyennes, avec un signal sur un '
+        'timeframe inférieur. <span class="chip mid">poursuite</span> : le prix est déjà étendu. Le grade est alors '
+        'plafonné à B : prudence.</div>'
+        '<h4>4. Quelle qualité ?</h4>'
+        f'<div class="chips"><span class="chip qa">A ≥ {GRADE_MIN["A"]}</span>'
+        f'<span class="chip qb">B {GRADE_MIN["B"]} – {GRADE_MIN["A"] - 1}</span>'
+        f'<span class="chip low">C &lt; {GRADE_MIN["B"]}</span></div>'
+        '<div>Grade A : les critères du scanner sont réunis, sans garantie de résultat. Grade B : critères partiels. '
+        'Grade C : ce signal ne suffit pas à lui seul à décider.</div>'
+        '<h4>5. Les autres colonnes confirment-elles ?</h4>'
+        '<div><b>Confiance</b> ≥ 70 % : la plupart des timeframes vont dans le même sens. <b>Jauge</b> : sa couleur '
+        'doit rester du côté de l’entrée. <b>RSI</b> sous chaque cellule : il pèse dans le score Qualité ; un RSI '
+        'extrême dans le sens du trade le réduit.</div>'
+        '<h4>6. Quand renoncer ?</h4>'
+        '<div>Pastille de fraîcheur <b>en retard</b> ou <b>périmée</b> ; filtre D1 contraire ; grade C ; signal '
+        'contraire sur un timeframe supérieur ; marché fermé ou données absentes.</div>'
+        '<h4>7. Avant d’agir</h4>'
+        '<div>Vérifiez le signal sur votre propre graphique, puis fixez votre risque et votre taille de position. '
+        'Testez la méthode en compte démo. Le module <b>bbma_backtest.py</b> permet de mesurer les grades sur '
+        'l’historique.</div>'
+        '</div>'
+    )
+
+
 CSS = """<style>
 .stApp{background:#131722}
 .bb-wrap{overflow-x:auto;background:#1e222d;border:1px solid #2a2e39;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.5);padding:6px}
@@ -299,6 +337,11 @@ def _toggle_legend():
     st.session_state["show_legend"] = not st.session_state.get("show_legend", False)
 
 
+def _toggle_guide():
+    """Bascule l'affichage du guide de décision (masqué par défaut)."""
+    st.session_state["show_guide"] = not st.session_state.get("show_guide", False)
+
+
 def sidebar_settings():
     """Affiche la barre latérale et retourne les paramètres choisis."""
     base = DEFAULT_PAIRS.split()                       # les 12 paires par défaut, toujours scannées
@@ -356,6 +399,11 @@ def main():
                   key="btn_legend", on_click=_toggle_legend)
         if legend_open:
             st.markdown(legend_html(show_recent), unsafe_allow_html=True)
+        guide_open = st.session_state.get("show_guide", False)
+        st.button("Masquer le guide de décision" if guide_open else "Afficher le guide de décision",
+                  key="btn_guide", on_click=_toggle_guide)
+        if guide_open:
+            st.markdown(guide_html(), unsafe_allow_html=True)
         suffix = " · prochain scan automatique dans 5 min" if auto else " · scan automatique désactivé"
         st.caption(f"Dernier scan : {ts:%H:%M:%S} UTC{suffix}")
         st.markdown(DISCLAIMER_CSS + DISCLAIMER_HTML, unsafe_allow_html=True)
