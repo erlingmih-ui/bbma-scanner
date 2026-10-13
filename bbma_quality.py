@@ -1,8 +1,13 @@
-"""Colonne « Qualité » de l'entrée BBMA.
+"""Colonne « Qualité » de l'entrée BBMA, et Confiance pondérée.
 
 Module ajouté au moteur existant : bbma_core.py n'est pas modifié. Les fonctions de
 téléchargement, de détection et de synthèse sont réutilisées ; les poids, seuils et
 libellés viennent de bbma_quality_codes.py.
+
+Corrections par rapport à la version précédente :
+  - anti-poursuite : un prix trop éloigné du mauvais côté de la MID ne rapporte plus de points ;
+  - confiance pondérée : chaque timeframe compte selon son poids, les signaux contraires
+    réduisent la confiance, et un timeframe sans données est exclu au lieu de pénaliser.
 """
 import html
 from datetime import datetime, timezone
@@ -11,9 +16,10 @@ import pandas as pd
 
 import bbma_core as core
 import bbma_fresh as bf
+import bbma_gauge as bg
 import bbma_session as bs
 from bbma_quality_codes import (
-    ATR_PERIOD, CHASE_BELOW, CHASE_MISSING, CHASE_STEPS, CODE_WEIGHT,
+    ATR_PERIOD, CHASE_BELOW, CHASE_BELOW_MAX_ATR, CHASE_MISSING, CHASE_STEPS, CODE_WEIGHT,
     D1_AGREE, D1_DISAGREE, D1_UNKNOWN, GRADE_MIN, MAX_CONFLUENCE, MID_PERIOD,
     QUAL_LABELS, RSI_MISSING, RSI_POINTS, RSI_ZONE_OVERBOUGHT, RSI_ZONE_PULLBACK,
 )
@@ -73,6 +79,33 @@ def scan_quality(pairs, tfs, trend=True):
     return res, trends, failed, len(jobs), datetime.now(timezone.utc), feats
 
 
+def confiance_ponderee(cells, tfs, sens_ref, avail):
+    """Confiance pondérée par timeframe, entre 0 et 1.
+
+    - Numérateur : poids des TF dont le signal va dans le sens de l'entrée, moins le poids des TF
+      dont le signal est contraire (un signal contraire réduit la confiance).
+    - Dénominateur : poids des TF disponibles. Un TF sans données n'est pas compté.
+    - Poids par TF : bbma_gauge.TF_WEIGHT (MN 5 … M5 0.5).
+    Retourne None s'il n'y a ni sens ni TF disponible."""
+    if sens_ref is None:
+        return None
+    avail = set(avail)
+    num = den = 0.0
+    for t in tfs:
+        if t not in avail:
+            continue
+        w = bg.TF_WEIGHT.get(t, bg.DEFAULT_TF_WEIGHT)
+        den += w
+        _, d = cells.get(t, (None, None))
+        if d == sens_ref:
+            num += w
+        elif d is not None:
+            num -= w
+    if den == 0:
+        return None
+    return max(0.0, num) / den
+
+
 def qualite_entree(code, sens, conf, d1, feat):
     """Score de qualité (0-100), grade A/B/C et détail par critère.
     Retourne (None, None, None) s'il n'y a pas d'entrée."""
@@ -98,14 +131,15 @@ def qualite_entree(code, sens, conf, d1, feat):
         else:
             detail["rsi"] = RSI_POINTS["neutral"]
 
-    # Anti-poursuite : ds > 0 = prix étendu dans le sens du trade
+    # Anti-poursuite : ds > 0 = prix étendu dans le sens du trade ; ds < 0 = prix de l'autre côté de la MID
     d = feat.get("dist_atr")
     if d is None:
         detail["chase"] = CHASE_MISSING
     else:
         ds = d * sign
         if ds < 0:
-            detail["chase"] = CHASE_BELOW
+            # Proche de la MID : points réduits. Loin de la MID du mauvais côté : 0 point.
+            detail["chase"] = CHASE_BELOW if -ds <= CHASE_BELOW_MAX_ATR else 0
         else:
             detail["chase"] = next((pts for seuil, pts in CHASE_STEPS if ds <= seuil), 0)
 

@@ -106,9 +106,13 @@ def backtest_pair(pair, base, tfs, start):
             continue
 
         cells = {}
+        avail = []
         for tf in tfs:
             sub = frames[tf].closed_before(T)
-            cells[tf] = core.detect(sub) if len(sub) >= core.MIN_BARS else (None, None)
+            ok = len(sub) >= core.MIN_BARS
+            if ok:
+                avail.append(tf)
+            cells[tf] = core.detect(sub) if ok else (None, None)
 
         d1 = None
         d1sub = frames["D1"].closed_before(T)
@@ -129,7 +133,7 @@ def backtest_pair(pair, base, tfs, start):
             continue
 
         feat, a = features(esub)
-        conf = core.confiance_score(cells, tfs, sens_e)
+        conf = bq.confiance_ponderee(cells, tfs, sens_e, avail)
         q_score, q_grade, _ = bq.qualite_entree(code_e, sens_e, conf, d1, feat)
         kind = bs.entry_kind(cells, tfs, tf_e, code_e)
         q_score, q_grade = bs.cap_grade(q_score, q_grade, kind)

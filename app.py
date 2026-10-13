@@ -306,7 +306,8 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
             tf_tds.append(cell_html(code, direction, rsi_v, recent))
         d1 = trends.get(p)
         tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, d1)
-        score = core.confiance_score(cells, tfs, sens_e) if sens_e else None
+        avail = [t for t in tfs if feats.get((p, t)) is not None]   # TF sans données exclus
+        score = bq.confiance_ponderee(cells, tfs, sens_e, avail)
         gauge = bg.compute_gauge(cells, tfs, d1)
         q_score, q_grade, q_detail = bq.qualite_entree(
             code_e, sens_e, score, d1, feats.get((p, tf_e)))

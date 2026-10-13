@@ -7,6 +7,9 @@
 - entry_kind distingue un vrai pullback (signal d'entrée sur un TF inférieur) d'une poursuite
   (le TF directeur sert d'entrée, faute de TF d'entrée). Une poursuite ne peut pas être grade A.
 Module ajouté : bbma_core.py n'est pas modifié.
+
+Correction : cap_grade ne modifie plus le score. Une poursuite au score élevé reçoit le grade B,
+et le score réel reste affiché.
 """
 import bbma_core as core
 from bbma_quality_codes import GRADE_MIN
@@ -49,7 +52,7 @@ def entry_kind(cells, tf_dispo, tf_e, code_e):
 
 
 def cap_grade(score, grade, kind):
-    """Une poursuite ne peut pas dépasser le grade B."""
+    """Une poursuite ne peut pas dépasser le grade B. Le score réel est conservé."""
     if kind == "poursuite" and grade == "A":
-        return GRADE_MIN["A"] - 1, "B"
+        return score, "B"
     return score, grade
