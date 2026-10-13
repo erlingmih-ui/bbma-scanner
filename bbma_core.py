@@ -23,11 +23,16 @@ def sym(pair):
 TFS = {"MN": ("1mo", "10y", None), "W1": ("1wk", "5y", None), "D1": ("1d", "2y", None),
        "H4": ("1h", "180d", "4h"), "H1": ("1h", "60d", None), "M15": ("15m", "30d", None),
        "M5": ("5m", "30d", None)}
-PRIORITY = ["MOM", "EXM", "EXT", "MHV", "CSAK", "RE"]   # priorité de détection (cycle BBMA)
+PRIORITY = ["RE", "MOM", "EXM", "EXT", "MHV", "CSAK"]   # priorité de détection : RE en tête, une entrée valide n'est pas masquée
 
 TF_ORDER = ["MN", "W1", "D1", "H4", "H1", "M15", "M5"]   # du plus haut au plus bas
-SIG_DIRECTEUR = {"MOM", "EXM", "EXT", "RE"}              # signaux de structure
-SIG_ENTREE = {"RE", "MHV", "CSAK", "EXT"}                # signaux déclencheurs (EXT inclus pour M15/M5)
+SIG_DIRECTEUR = {"MOM", "EXM", "EXT", "CSAK", "RE"}      # signaux de structure / direction (CSAK = Candle Arah)
+# Entrées BBMA Oma Ally : les setups RE et MHV. CSAK et MOM sont des signaux de direction, pas des entrées.
+ENTRY_ALLOW_EXT = False       # True : EXT redevient un déclencheur d'entrée sur les TF inférieurs
+SIG_ENTREE = {"RE", "MHV"} | ({"EXT"} if ENTRY_ALLOW_EXT else set())
+# Repli « poursuite » : si aucun TF inférieur n'a RE/MHV, le TF directeur sert d'entrée.
+# False (défaut) : seul un directeur déjà en RE/MHV peut servir d'entrée ; sinon pas d'entrée.
+ALLOW_CHASE_FALLBACK = False
 
 RETRY = 2          # essais par téléchargement
 PAUSE = 1.5        # secondes entre essais (multipliées par le numéro d'essai)
@@ -212,8 +217,11 @@ def synthese(cells, tf_dispo, use_filter, d1_trend):
         if code in SIG_ENTREE and d == sens:
             return t, code, sens
 
-    # 3. Aucun TF d'entrée trouvé : le directeur sert d'entrée
-    return tf_dir, code_dir, sens
+    # 3. Aucun TF d'entrée trouvé : le directeur sert d'entrée seulement s'il est lui-même un setup
+    #    d'entrée (RE/MHV), ou si le repli « poursuite » est activé.
+    if ALLOW_CHASE_FALLBACK or code_dir in SIG_ENTREE:
+        return tf_dir, code_dir, sens
+    return None, None, None
 
 
 def confiance_score(cells, tfs, sens_ref):
