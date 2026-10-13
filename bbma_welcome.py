@@ -66,7 +66,7 @@ def _page_html() -> str:
 
         '<div class="wl-grid">'
         '<div class="wl-card"><h3>Multi-timeframes</h3><p>De <b>MN</b> à <b>M5</b> sur forex, or et Bitcoin : '
-        'signaux MOM, EXM, EXT, MHV, CSAK et RE sur chaque timeframe.</p></div>'
+        'signaux MOM, MHV, CSAK et RE sur chaque timeframe, dans l’ordre du cycle BBMA.</p></div>'
         '<div class="wl-card"><h3>Synthèse d’entrée</h3><p>La colonne <b>Entrée BBMA</b> combine le timeframe '
         'directeur et un timeframe d’entrée, avec le filtre de tendance D1.</p></div>'
         '<div class="wl-card"><h3>Notes de lecture</h3><p><b>Confiance</b>, <b>Jauge</b> Buy / Sell et '
