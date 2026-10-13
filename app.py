@@ -71,6 +71,18 @@ def legend_html(show_recent=False) -> str:
     sigs_html = "".join(f"<div><b>{code}</b> · {name}</div>" for code, name in sigs)
     return (
         '<div class="bb-legend">'
+        '<h4>Choix des paires</h4>'
+        '<div><b>1.</b> Cochez <b>Choisir dans la liste</b> dans la barre latérale.</div>'
+        '<div><b>2.</b> Pour <b>ajouter</b> une paire : cliquez dans « Paires disponibles », tapez son nom '
+        '(ex. AUDJPY) et sélectionnez-la.</div>'
+        '<div><b>3.</b> Pour <b>retirer</b> une paire : cliquez sur son × dans la liste.</div>'
+        '<div><b>4.</b> Pour revenir aux paires d’origine : cliquez sur <b>Réinitialiser (paires par défaut)</b>.</div>'
+        f'<div class="note">Limite : {MAX_PAIRS} paires. Si la limite est atteinte, retirez d’abord une paire '
+        'avant d’en ajouter une.</div>'
+        '<div class="note">Les 12 paires par défaut sont proposées en premier. Quand la case est cochée, la zone '
+        '« Paires (max 12) » est ignorée ; décochez-la pour revenir à la saisie libre.</div>'
+        '<div class="note">Votre choix ne concerne que vous. Il est conservé d’une visite à l’autre si votre compte '
+        'est identifié ; sinon il est perdu au rechargement de la page.</div>'
         '<h4>Direction</h4>'
         '<div class="chips"><span class="chip buy">▲ Buy</span><span class="chip sell">▼ Sell</span>'
         '<span class="chip tp">TPW = TP Wajib (avec EXM / EXT)</span></div>'
