@@ -72,6 +72,11 @@ def legend_html(show_recent=False) -> str:
     return (
         '<div class="bb-legend">'
         '<h4>Choix des paires</h4>'
+        '<div><b>Mode saisie libre</b> (case « Choisir dans la liste » décochée) : écrivez les paires dans la zone '
+        '« Paires (max 12) », séparées par un espace, par exemple <b>EURUSD GBPUSD USDJPY</b>. Validez avec '
+        'Ctrl+Entrée ou en cliquant ailleurs.</div>'
+        '<div><b>Mode liste</b> (case cochée) : la zone de texte est ignorée. Choisissez les paires dans '
+        '« Paires disponibles ».</div>'
         '<div><b>1.</b> Cochez <b>Choisir dans la liste</b> dans la barre latérale.</div>'
         '<div><b>2.</b> Pour <b>ajouter</b> une paire : cliquez dans « Paires disponibles », tapez son nom '
         '(ex. AUDJPY) et sélectionnez-la.</div>'
@@ -297,7 +302,11 @@ def _toggle_legend():
 
 def sidebar_settings():
     """Affiche la barre latérale et retourne les paramètres choisis."""
-    raw = st.sidebar.text_area(f"Paires (max {MAX_PAIRS})", DEFAULT_PAIRS)
+    raw = st.sidebar.text_area(
+        f"Paires (max {MAX_PAIRS})", DEFAULT_PAIRS,
+        placeholder="Exemple : EURUSD GBPUSD USDJPY",
+        help="Saisie libre : écrivez les paires en les séparant par un espace, par exemple EURUSD GBPUSD USDJPY. "
+             "Validez avec Ctrl+Entrée ou en cliquant ailleurs. Cette zone est ignorée quand « Choisir dans la liste » est coché.")
     pairs = list(dict.fromkeys(raw.upper().split()))   # dédoublonnage en conservant l'ordre
     if len(pairs) > MAX_PAIRS:
         st.sidebar.warning(f"Limité aux {MAX_PAIRS} premières paires.")
