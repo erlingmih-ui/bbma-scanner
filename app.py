@@ -59,7 +59,7 @@ LEGEND_CSS = """
 .bb-legend .chip.qb{background:#2962ff;color:#fff}
 .bb-legend .chip.tp{background:#2962ff;color:#fff}
 .bb-legend .sigs{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:3px 14px}
-.bb-legend .grad{height:8px;border-radius:4px;margin:6px 0 4px;background:linear-gradient(90deg,#ef5350,#2a2e39 50%,#26a69a)}
+.bb-legend .grad{height:8px;border-radius:4px;margin:6px 0 4px;background:linear-gradient(90deg,#ef5350 0 48%,transparent 48% 52%,#26a69a 52%)}
 .bb-legend .scale{display:flex;justify-content:space-between;font-size:11px;color:#787b86}
 .bb-legend .note{color:#787b86;font-size:12px;margin-top:4px}
 """
@@ -116,7 +116,7 @@ def legend_html(show_recent=False) -> str:
         '<h4>Jauge Buy / Sell</h4>'
         '<div class="grad"></div>'
         '<div class="scale"><span>−100 vente forte</span><span>0</span><span>+100 achat fort</span></div>'
-        '<div class="note">Force générale de la paire (source TradingView, M15 à W1, pondérée par timeframe). Indépendante de BBMA. Détail au survol.</div>'
+        '<div class="note">Force générale de la paire (source TradingView, M15 à W1). Rouge à gauche : vente ; vert à droite : achat ; « S % / B % » : part des indicateurs vendeurs / acheteurs. Indépendante de BBMA.</div>'
         '<h4>Qualité de l’entrée</h4>'
         f'<div class="chips"><span class="chip qa">A ≥ {GRADE_MIN["A"]}</span>'
         f'<span class="chip qb">B {GRADE_MIN["B"]} – {GRADE_MIN["A"] - 1}</span>'
@@ -202,12 +202,19 @@ table.bb td.conf.low,table.bb td.conf.none{background:#2a2e39;color:#787b86}
 /* Jauge Buy / Sell */
 table.bb td.gauge{min-width:96px;max-width:116px;padding:8px 8px}
 table.bb td.gauge.none{background:#2a2e39;color:#787b86}
-table.bb .gbar{position:relative;height:10px;border-radius:4px;background:linear-gradient(90deg,#ef5350,#2a2e39 50%,#26a69a)}
-table.bb .gpt{position:absolute;top:-3px;width:4px;height:14px;border-radius:2px;background:#fff;transform:translateX(-50%)}
+table.bb .gbar{display:flex;gap:3px;height:10px}
+table.bb .gh{flex:1;display:flex;height:10px;border-radius:3px;overflow:hidden}
+table.bb .gh.gs{background:rgba(239,83,80,.22);justify-content:flex-end}
+table.bb .gh.gb{background:rgba(38,166,154,.22);justify-content:flex-start}
+table.bb .gh.gs i{background:#ef5350}
+table.bb .gh.gb i{background:#26a69a}
 table.bb .glab{margin-top:5px;font-size:12px;font-weight:700}
 table.bb .glab.buy{color:#26a69a}
 table.bb .glab.sell{color:#ef5350}
 table.bb .glab.neutral{color:#787b86}
+table.bb .gsplit{display:flex;justify-content:space-between;margin-top:3px;font-size:10px;font-weight:600}
+table.bb .gsplit .gs{color:#ef5350}
+table.bb .gsplit .gb{color:#26a69a}
 /* Nuclear (direction, score, timeframes ; couleur et intensité posées en ligne) */
 table.bb td.nuc{font-weight:700;font-size:13px;min-width:112px;max-width:140px;padding:8px 10px;white-space:normal;line-height:1.3}
 table.bb td.nuc.none{background:#2a2e39;color:#787b86}
