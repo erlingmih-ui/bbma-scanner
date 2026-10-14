@@ -23,7 +23,8 @@ pas sur la synthèse ni sur la colonne Qualité. Il ajoute une information : la 
 Intégration minimale dans app.py (facultative) :
     import bbma_cycle as bcy
     states = bcy.scan_cycles(pairs, tfs)                       # {(paire, tf): état ou None}
-    ... dans la boucle des cellules : bcy.cycle_cell(states.get((p, t)))
+    ... par paire : tf, st = bcy.best_cycle({t: states.get((p, t)) for t in tfs}, tfs, sens_entree)
+                    bcy.cycle_cell(st, tf, bcy.overview({t: states.get((p, t)) for t in tfs}, tfs))
     ... et une fois dans le CSS de la page : bcy.CYCLE_CSS
 """
 import html
@@ -182,11 +183,44 @@ def scan_cycles(pairs, tfs):
 
 # --- Affichage --------------------------------------------------------------------------------
 
-def tooltip(st):
+def best_cycle(states, tfs, sens=None):
+    """Cycle à afficher pour une paire : (tf, état) ou (None, None).
+
+    states : {tf: état ou None} ; tfs : timeframes affichés ; sens : sens de l'entrée BBMA si elle existe.
+    On retient le cycle le plus avancé. Si sens est donné, les cycles de ce sens passent avant les autres.
+    À étape égale, le timeframe le plus élevé l'emporte."""
+    best, best_key = (None, None), None
+    for t in tfs:
+        st = (states or {}).get(t)
+        if st is None:
+            continue
+        rank = core.TF_ORDER.index(t) if t in core.TF_ORDER else len(core.TF_ORDER)
+        key = (1 if (sens and st["sens"] == sens) else 0, st["phase"], -rank)
+        if best_key is None or key > best_key:
+            best, best_key = (t, st), key
+    return best
+
+
+def overview(states, tfs):
+    """Une ligne par timeframe : « H4 : achat · MHV (2/4) » ou « H4 : – »."""
+    lines = []
+    for t in tfs:
+        st = (states or {}).get(t)
+        if st is None:
+            lines.append(f"{t} : –")
+        else:
+            lines.append(f"{t} : {SIDE_TEXT[st['sens']]} · {st['name']} ({st['phase']}/4)")
+    return lines
+
+
+def tooltip(st, tf=None, lines_all=None):
     if st is None:
-        return "Cycle BBMA : aucun cycle actif"
+        head = "Cycle BBMA : aucun cycle actif"
+        lines = [head] + ([""] + ["Tous les TF :"] + lines_all if lines_all else [])
+        return "&#10;".join(html.escape(x) for x in lines)
     chain = " > ".join(NAMES[i] + (" ✓" if i <= st["steps"] else "") for i in (1, 2, 3, 4))
-    lines = [f"Cycle {SIDE_TEXT[st['sens']]} : étape {st['phase']}/4 ({st['name']})",
+    where = f" sur {tf}" if tf else ""
+    lines = [f"Cycle {SIDE_TEXT[st['sens']]}{where} : étape {st['phase']}/4 ({st['name']})",
              chain,
              f"Prochaine étape : {st['next']}",
              f"Âge de l'étape : {st['age']} bougie(s)"]
@@ -194,15 +228,19 @@ def tooltip(st):
         lines.append("Étape d'entrée (MHV / RE)")
     if st["tp_for"]:
         lines.append(f"TP Wajib : clôturer les positions {SIDE_TEXT[st['tp_for']]}")
+    if lines_all:
+        lines += ["", "Tous les TF :"] + lines_all
     return "&#10;".join(html.escape(x) for x in lines)
 
 
-def cycle_cell(st) -> str:
-    """Cellule HTML : quatre pastilles E M C R (franchies = colorées), nom de l'étape en dessous."""
-    tip = tooltip(st)
+def cycle_cell(st, tf=None, lines_all=None) -> str:
+    """Cellule HTML : quatre pastilles E M C R (franchies = colorées), nom de l'étape en dessous.
+    tf : timeframe du cycle affiché ; lines_all : détail de tous les TF (voir overview), affiché au survol."""
+    tip = tooltip(st, tf, lines_all)
     if st is None:
         return f'<td class="cyc none" title="{tip}">-</td>'
     dots = "".join(f'<i class="{"on" if i <= st["steps"] else ""}">{LETTERS[i]}</i>' for i in (1, 2, 3, 4))
     tp = " · TP" if st["tp_for"] else ""
+    label = (f"{html.escape(tf)} · " if tf else "") + st["name"] + tp
     return (f'<td class="cyc {st["sens"]}" title="{tip}"><span class="st">{dots}</span>'
-            f'<span class="nm">{st["name"]}{tp}</span></td>')
+            f'<span class="nm">{label}</span></td>')
