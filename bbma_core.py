@@ -65,10 +65,25 @@ RE_SECOND_RETEST_IF_UNCONFIRMED = False
 SIGNAL_WINDOW = 300
 
 # --- Expiration de l'armement RE (point 2) ---
-# Un armement (MOM ou CSAK) expire après RE_ARM_MAX_BARS bougies, ou dès que la clôture sort
+# Un armement (MOM ou CSAK) expire après RE_ARM_DURATION (point 1), ou dès que la clôture sort
 # de l'autre côté de la bande de Bollinger (la tendance est invalidée). Durée à calibrer par TF.
-RE_ARM_MAX_BARS = 40
 RE_ARM_INVALIDATE = True
+# Durée maximale d'armement, en temps réel, par timeframe (point 1). Convertie en bougies
+# selon le TF détecté dans l'index. Valeurs de départ, à calibrer.
+RE_ARM_DURATION = {
+    "M5": pd.Timedelta(hours=3, minutes=20),   # ~40 bougies
+    "M15": pd.Timedelta(hours=10),             # ~40 bougies
+    "H1": pd.Timedelta(days=2),                # ~48 bougies
+    "H4": pd.Timedelta(days=7),                # ~42 bougies
+    "D1": pd.Timedelta(days=30),               # ~30 bougies
+    "W1": pd.Timedelta(weeks=26),              # ~26 bougies
+    "MN": pd.Timedelta(days=365),              # ~12 bougies
+}
+# Durée des bougies de chaque TF, pour retrouver le TF depuis l'écart médian de l'index
+BAR_LEN = {"M5": pd.Timedelta(minutes=5), "M15": pd.Timedelta(minutes=15), "H1": pd.Timedelta(hours=1),
+           "H4": pd.Timedelta(hours=4), "D1": pd.Timedelta(days=1), "W1": pd.Timedelta(weeks=1),
+           "MN": pd.Timedelta(days=30)}
+RE_ARM_FALLBACK_BARS = 40   # utilisé si l'index est trop court pour deviner le TF
 
 # --- Filtre de tendance sur les entrées (point 3) ---
 # True : un MHV (et donc un RE) n'est retenu que s'il va dans le sens de la dernière impulsion
@@ -101,13 +116,22 @@ def wma(s, n):
     return pd.Series(out, index=s.index)
 
 
-def _reentry(c, h, l, mid, up, low, zl_b, zh_b, zl_s, zh_s, dir_b, dir_s):
+def re_arm_bars(index):
+    """Durée d'armement RE en bougies, pour le TF déduit de l'écart médian entre bougies de l'index."""
+    if len(index) < 3:
+        return RE_ARM_FALLBACK_BARS
+    step = pd.Series(index).diff().median()
+    tf = min(BAR_LEN, key=lambda k: abs(BAR_LEN[k] - step))
+    return max(1, int(RE_ARM_DURATION[tf] / BAR_LEN[tf]))
+
+
+def _reentry(c, h, l, mid, up, low, zl_b, zh_b, zl_s, zh_s, dir_b, dir_s, max_bars=RE_ARM_FALLBACK_BARS):
     """Reentry (RE) : (série buy, série sell) d'entrée, décalées d'une bougie.
 
     Armé par un signal directionnel, consommé au premier retest. Le retest est validé si
     la confirmation Mid BB (si RE_USE_MID_BB) est respectée ; l'entrée est sur la bougie suivante.
-    Expiration (point 2) : l'armement tombe après RE_ARM_MAX_BARS bougies, ou si la clôture sort
-    de la bande opposée (RE_ARM_INVALIDATE).
+    Expiration (point 2) : l'armement tombe après max_bars bougies (voir re_arm_bars), ou si la clôture
+    sort de la bande opposée (RE_ARM_INVALIDATE).
     """
     n = len(c)
     C, H, L, MID = c.to_numpy(float), h.to_numpy(float), l.to_numpy(float), mid.to_numpy(float)
@@ -123,11 +147,11 @@ def _reentry(c, h, l, mid, up, low, zl_b, zh_b, zl_s, zh_s, dir_b, dir_s):
         # Expiration et invalidation de l'armement (point 2)
         if armed_b:
             age_b += 1
-            if age_b > RE_ARM_MAX_BARS or (RE_ARM_INVALIDATE and C[i] < LOW[i]):
+            if age_b > max_bars or (RE_ARM_INVALIDATE and C[i] < LOW[i]):
                 armed_b = False
         if armed_s:
             age_s += 1
-            if age_s > RE_ARM_MAX_BARS or (RE_ARM_INVALIDATE and C[i] > UP[i]):
+            if age_s > max_bars or (RE_ARM_INVALIDATE and C[i] > UP[i]):
                 armed_s = False
         # Retest achat : 1er retour dans la zone MA Low depuis le haut
         if armed_b and C[i-1] > ZHB[i-1] and L[i] <= ZHB[i] and C[i] >= ZHB[i]:
@@ -180,6 +204,7 @@ def _signals(df, lb=15):
     """Signaux de toutes les bougies : {code: (série buy, série sell)}. Calcul causal (aucune donnée future).
     Point 1 : seules les SIGNAL_WINDOW dernières bougies sont utilisées, en live comme en backtest."""
     df = df.iloc[-SIGNAL_WINDOW:]
+    max_bars = re_arm_bars(df.index)
     o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
     mid = c.rolling(20).mean(); sd = c.rolling(20).std(ddof=0)
     top, low = mid + 2 * sd, mid - 2 * sd
@@ -213,7 +238,7 @@ def _signals(df, lb=15):
 
     # RE : machine à états (voir _reentry et RE_USE_MID_BB). Armé seulement dans le sens de la tendance.
     re_b, re_s = _reentry(c, h, l, mid, top, low, zone_buy_lo, zone_buy_hi, zone_sell_lo, zone_sell_hi,
-                          mom_b | arah_b, mom_s | arah_s)
+                          mom_b | arah_b, mom_s | arah_s, max_bars=max_bars)
     if TREND_GATE_ENTRIES:
         re_b = re_b & (trend == 1)
         re_s = re_s & (trend == -1)
