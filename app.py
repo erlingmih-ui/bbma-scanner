@@ -68,7 +68,8 @@ LEGEND_CSS = """
 def legend_html(show_recent=False) -> str:
     """Légende organisée par sections, avec les mêmes couleurs que le tableau."""
     recent_note = ('<div class="note">Texte grisé « CODE ▲ −n » : la dernière bougie n’a pas de signal ; c’est le dernier signal, '
-                   'n bougies plus tôt (information seulement, non utilisé par la synthèse).</div>') if show_recent else ""
+                   'n bougies plus tôt. Dans « Entrée BBMA », le même texte grisé donne la dernière entrée possible '
+                   '(information seulement, non utilisé par la synthèse, la confiance ni la qualité).</div>') if show_recent else ""
     sigs = [("MOM", "Momentum"), ("EXM", "Extreme Magic (MA10)"), ("EXT", "Extreme (MA5)"),
             ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh"), ("RE", "Reentry (strict)")]
     sigs_html = "".join(f"<div><b>{code}</b> · {name}</div>" for code, name in sigs)
@@ -273,9 +274,18 @@ def cell_html(code, direction, rsi_value, recent=None) -> str:
             f'<div><b>{code}</b> {ARROW[direction]}{tpw}</div>{sub}</td>')
 
 
-def synth_cell(tf, code, direction, kind=None) -> str:
-    """Cellule « Entrée BBMA » : timeframe, signal, sens et nature de l'entrée (pullback ou poursuite)."""
+def synth_cell(tf, code, direction, kind=None, ghost=None) -> str:
+    """Cellule « Entrée BBMA » : timeframe, signal, sens et nature de l'entrée (pullback ou poursuite).
+    ghost : (tf, code, sens, age) de la dernière entrée récente, affichée en grisé quand il n'y a pas d'entrée."""
     if not tf:
+        if ghost:
+            gtf, gcode, gdir, age = ghost
+            side = "Buy" if gdir == "B" else "Sell"
+            when = f"il y a {age} bougie(s) sur {gtf}" if age else f"signal actuel sur {gtf}, direction récente"
+            tip = (f"Aucune entrée sur la dernière bougie · dernière entrée possible : {NAMES.get(gcode, gcode)} "
+                   f"· {side}, {when} (information seulement)")
+            txt = f"{gtf} {gcode} {ARROW[gdir]}" + (f" −{age}" if age else "")
+            return f'<td class="synth s1 none" title="{tip}"><div class="ghost">{txt}</div></td>'
         return '<td class="synth s1 none">–</td>'
     cls = "buy" if direction == "B" else "sell"
     side = "Buy" if direction == "B" else "Sell"
@@ -296,6 +306,28 @@ def conf_cell(score) -> str:
     pct = round(score * 100)
     cls = "high" if pct >= 70 else "mid" if pct >= 40 else "low"
     return f'<td class="conf s2 {cls}">{pct}%</td>'
+
+
+def recent_entry(cells, tfs, feats, pair, use_filter, d1):
+    """Dernière entrée « récente » (affichage grisé, information seulement) : même synthèse que l'entrée,
+    mais les timeframes sans signal sur la dernière bougie reprennent leur dernier signal récent.
+    Retourne (tf, code, sens, age) ou None. N'est jamais utilisée par Confiance, Qualité, Jauge ni le tri."""
+    filled, ages = {}, {}
+    for t in tfs:
+        code, d = cells[t]
+        if code:
+            filled[t] = (code, d)
+            continue
+        rec = (feats.get((pair, t)) or {}).get("recent")
+        if rec:
+            filled[t] = (rec[0], rec[1])
+            ages[t] = rec[2]
+        else:
+            filled[t] = (None, None)
+    tf_e, code_e, sens_e = core.synthese(filled, tfs, use_filter, d1)
+    if not tf_e:
+        return None
+    return tf_e, code_e, sens_e, ages.get(tf_e, 0)
 
 
 def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None) -> str:
@@ -322,7 +354,8 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         kind = bs.entry_kind(cells, tfs, tf_e, code_e)
         q_score, q_grade = bs.cap_grade(q_score, q_grade, kind)
         n = nuc.get(p)
-        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind), conf_cell(score),
+        ghost = recent_entry(cells, tfs, feats, p, use_filter, d1) if show_recent and not tf_e else None
+        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind, ghost), conf_cell(score),
                         bg.gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail)]
         fr_status, fr_tip = bf.pair_status(p, feats, tfs)
         row = f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>'
@@ -388,7 +421,7 @@ def sidebar_settings():
     tfs = st.sidebar.multiselect("Timeframes", list(core.TFS), list(core.TFS))
     use_filter = st.sidebar.checkbox("Filtre D1 (EMA50)", True)
     show_recent = st.sidebar.checkbox("Afficher les signaux récents (grisés)", False,
-                                      help="Dernier signal des bougies précédentes quand la dernière n'en a pas. Information seulement.")
+                                      help="Dernier signal des bougies précédentes quand la dernière n'en a pas, y compris dans la colonne Entrée BBMA. Information seulement.")
     auto = st.sidebar.checkbox(f"Scan automatique toutes les {AUTO_REFRESH // 60} min", True)
     if st.sidebar.button("Rafraîchir"):
         st.session_state["refresh_nonce"] = st.session_state.get("refresh_nonce", 0) + 1
