@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+import bbma_duka as duka   # Dukascopy pour M5/M15/H1 ; repli automatique sur yfinance
+
 log = logging.getLogger("bbma")
 
 # Symboles yfinance particuliers (le reste = PAIRE=X)
@@ -254,6 +256,10 @@ def rsi(close, n=RSI_PERIOD):
 
 def _history(pair, interval, period):
     """Télécharge les bougies avec réessais espacés. Retourne un DataFrame OHLC ou None."""
+    if duka.active(interval):                   # sans retard ; None -> yfinance ci-dessous
+        df = duka.fetch(pair, interval, period)
+        if df is not None:
+            return df
     for attempt in range(RETRY):
         try:
             df = yf.Ticker(sym(pair)).history(period=period, interval=interval)
@@ -276,7 +282,8 @@ def _lock_for(path):
 
 def _cache_path(pair, interval):
     safe = re.sub(r"[^A-Za-z0-9]", "_", pair)   # empêche les chemins hors du dossier cache
-    return CACHE_DIR / f"{safe}_{interval}.parquet"
+    tag = "_dk" if duka.active(interval) else ""   # cache séparé : pas de mélange yfinance / Dukascopy
+    return CACHE_DIR / f"{safe}_{interval}{tag}.parquet"
 
 
 def _utc_index(df):
