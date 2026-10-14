@@ -65,19 +65,20 @@ RE_SECOND_RETEST_IF_UNCONFIRMED = False
 SIGNAL_WINDOW = 300
 
 # --- Expiration de l'armement RE (point 2) ---
-# Un armement (MOM ou CSAK) expire après RE_ARM_DURATION (point 1), ou dès que la clôture sort
+# Un armement (MOM ou CSAK) expire après RE_ARM_BARS bougies (point 1), ou dès que la clôture sort
 # de l'autre côté de la bande de Bollinger (la tendance est invalidée). Durée à calibrer par TF.
 RE_ARM_INVALIDATE = True
-# Durée maximale d'armement, en temps réel, par timeframe (point 1). Convertie en bougies
-# selon le TF détecté dans l'index. Valeurs de départ, à calibrer.
-RE_ARM_DURATION = {
-    "M5": pd.Timedelta(hours=3, minutes=20),   # ~40 bougies
-    "M15": pd.Timedelta(hours=10),             # ~40 bougies
-    "H1": pd.Timedelta(days=2),                # ~48 bougies
-    "H4": pd.Timedelta(days=7),                # ~42 bougies
-    "D1": pd.Timedelta(days=30),               # ~30 bougies
-    "W1": pd.Timedelta(weeks=26),              # ~26 bougies
-    "MN": pd.Timedelta(days=365),              # ~12 bougies
+# Durée maximale d'armement RE, en bougies de chaque TF (point 1, version révisée).
+# Une durée en bougies respecte les fermetures de marché (week-ends) : seules les bougies existantes comptent.
+# Valeurs de départ, à calibrer par backtest (ex. 10, 20, 40, 80 bougies).
+RE_ARM_BARS = {
+    "M5": 40,
+    "M15": 40,
+    "H1": 48,
+    "H4": 42,
+    "D1": 30,
+    "W1": 26,
+    "MN": 12,
 }
 # Durée des bougies de chaque TF, pour retrouver le TF depuis l'écart médian de l'index
 BAR_LEN = {"M5": pd.Timedelta(minutes=5), "M15": pd.Timedelta(minutes=15), "H1": pd.Timedelta(hours=1),
@@ -117,12 +118,12 @@ def wma(s, n):
 
 
 def re_arm_bars(index):
-    """Durée d'armement RE en bougies, pour le TF déduit de l'écart médian entre bougies de l'index."""
+    """Durée d'armement RE en bougies (RE_ARM_BARS), pour le TF déduit de l'écart médian de l'index."""
     if len(index) < 3:
         return RE_ARM_FALLBACK_BARS
     step = pd.Series(index).diff().median()
     tf = min(BAR_LEN, key=lambda k: abs(BAR_LEN[k] - step))
-    return max(1, int(RE_ARM_DURATION[tf] / BAR_LEN[tf]))
+    return RE_ARM_BARS[tf]
 
 
 def _reentry(c, h, l, mid, up, low, zl_b, zh_b, zl_s, zh_s, dir_b, dir_s, max_bars=RE_ARM_FALLBACK_BARS):
