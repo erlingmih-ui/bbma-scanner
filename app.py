@@ -3,7 +3,6 @@
 La logique métier (téléchargement, détection, synthèse, confiance) est dans ``bbma_core``.
 La colonne Qualité est calculée par ``bbma_quality`` (poids dans ``bbma_quality_codes``).
 La jauge Buy/Sell (force générale de la paire) vient de TradingView via ``bbma_strength``.
-La colonne Cycle (Extreme > MHV > CSAK > RE) est calculée par ``bbma_cycle`` : information seulement.
 Ce module ne gère que l'affichage et les paramètres de la barre latérale.
 
 Lancement : streamlit run app.py
@@ -14,7 +13,6 @@ import logging
 import streamlit as st
 
 import bbma_core as core
-import bbma_cycle as bcy
 import bbma_fresh as bf
 import bbma_session as bs
 import bbma_gauge as bg
@@ -30,7 +28,7 @@ APP_TITLE = "BBMA OA MTF Scanner"
 DEFAULT_PAIRS = "EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF NZDUSD EURJPY GBPJPY EURGBP XAUUSD BTCUSD"
 MAX_PAIRS = 12
 CACHE_TTL = 240          # secondes ; inférieur à AUTO_REFRESH pour qu'un vrai scan ait lieu à chaque cycle
-SCAN_VERSION = 6         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
+SCAN_VERSION = 5         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
 AUTO_REFRESH = 300       # secondes entre deux scans automatiques
 RSI_LOW, RSI_HIGH = 30, 70   # repères visuels uniquement (couleur), aucun effet sur les signaux
 
@@ -105,20 +103,8 @@ def legend_html(show_recent=False) -> str:
         '<h4>Entrée BBMA</h4>'
         '<div class="chips"><span class="chip buy">pullback</span><span class="chip mid">poursuite</span></div>'
         '<div class="note">Pullback : retour vers la zone MA, avec un signal d’entrée sur un TF inférieur. Poursuite : le TF directeur sert d’entrée, prix déjà étendu, grade plafonné à B. H4 ancré sur : ' + bs.H4_SESSION + '.</div>'
-        '<div>TF directeur (MOM / EXM / EXT / CSAK / RE) + TF d’entrée plus bas (RE / MHV) dans le même sens. '
-        'Annulé si un TF supérieur ou intermédiaire contredit, ou si le sens va contre le filtre D1 (clôture vs EMA50). '
-        'Le directeur sert d’entrée seulement s’il est lui-même en RE ou MHV.</div>'
-        '<h4>Cycle BBMA</h4>'
-        '<div class="chips"><span class="chip buy">E</span><span class="chip buy">M</span>'
-        '<span class="chip sell">C</span><span class="chip sell">R</span></div>'
-        '<div>Les quatre pastilles suivent le cycle <b>E</b>xtreme › <b>M</b>HV › <b>C</b>SAK › <b>R</b>E : une pastille '
-        'colorée = étape franchie (vert : cycle d’achat, rouge : cycle de vente). Le cycle avance dans cet ordre '
-        'seulement, retombe à zéro sur un Extreme contraire (TP Wajib si l’étape CSAK ou RE était atteinte), '
-        'après expiration, ou si la clôture passe du mauvais côté de la Mid BB. Le timeframe le plus avancé est '
-        'affiché, celui du sens de l’entrée en priorité ; le détail de tous les timeframes s’affiche au survol.</div>'
-        f'<div class="note">Le CSAK compte à sa première bougie et reste affiché {core.CSAK_VALID_BARS} bougies. Un RE '
-        f'expire après {core.RE_ARM_MAX_BARS} bougies sans retest. Information seulement : le cycle n’entre ni dans '
-        'l’entrée BBMA, ni dans la confiance, ni dans la qualité.</div>'
+        '<div>TF directeur (MOM / EXM / EXT / RE) + TF d’entrée plus bas (RE / MHV / CSAK / EXT) dans le même sens. '
+        'Annulé si un TF supérieur contredit, ou si le sens va contre le filtre D1 (clôture vs EMA50).</div>'
         '<h4>Confiance</h4>'
         '<div class="chips"><span class="chip buy">≥ 70 %</span><span class="chip mid">40 – 69 %</span>'
         '<span class="chip low">&lt; 40 %</span></div>'
@@ -172,7 +158,7 @@ def guide_html() -> str:
         'extrême dans le sens du trade le réduit.</div>'
         '<h4>6. Quand renoncer ?</h4>'
         '<div>Pastille de fraîcheur <b>en retard</b> ou <b>périmée</b> ; filtre D1 contraire ; grade C ; signal '
-        'contraire sur un timeframe supérieur ou intermédiaire ; marché fermé ou données absentes.</div>'
+        'contraire sur un timeframe supérieur ; marché fermé ou données absentes.</div>'
         '<h4>7. Avant d’agir</h4>'
         '<div>Vérifiez le signal sur votre propre graphique, puis fixez votre risque et votre taille de position. '
         'Testez la méthode en compte démo. Le module <b>bbma_backtest.py</b> permet de mesurer les grades sur '
@@ -184,7 +170,7 @@ def guide_html() -> str:
 CSS = """<style>
 .stApp{background:#131722}
 .bb-wrap{overflow-x:auto;background:#1e222d;border:1px solid #2a2e39;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.5);padding:6px}
-table.bb{border-collapse:separate;border-spacing:4px;width:100%;min-width:1150px;font:13px/1.2 -apple-system,"Trebuchet MS",Roboto,sans-serif}
+table.bb{border-collapse:separate;border-spacing:4px;width:100%;min-width:1040px;font:13px/1.2 -apple-system,"Trebuchet MS",Roboto,sans-serif}
 table.bb th{color:#787b86;font-weight:600;padding:8px 10px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 table.bb th.pair{color:#d1d4dc;text-align:left;font-size:13px;letter-spacing:0}
 table.bb th.hmtf{color:#2962ff}
@@ -246,21 +232,14 @@ table.bb th.pair{position:sticky;left:0;z-index:2;width:96px;min-width:96px;whit
 @media (max-width:1150px){.bb-wrap{overflow-x:auto}}
 table.bb tr:first-child th{position:sticky;top:3.75rem;z-index:3;background:#1e222d;box-shadow:0 0 0 4px #1e222d}
 table.bb tr:first-child th.pair{left:0;z-index:5}
-""" + LEGEND_CSS + """</style>""" + bcy.CYCLE_CSS
+""" + LEGEND_CSS + """</style>"""
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def run_scan(pairs: tuple, tfs: tuple, version: int, nonce: int = 0):
-    """Scan complet (signaux, tendances D1, RSI, ATR, cycles), mis en cache.
-    Retourne (res, trends, failed, total, ts, feats, nuc, cycles) ; feats contient le RSI et la distance ATR
-    par (paire, TF) ; cycles : {(paire, TF): état du cycle BBMA ou None}."""
-    out = bn.scan_full(pairs, tfs, trend=True)   # version : fait partie de la clé de cache
-    try:
-        cycles = bcy.scan_cycles(pairs, tfs)     # bougies déjà en cache disque : pas de téléchargement en plus
-    except Exception as e:                       # la colonne Cycle est informative : elle ne doit jamais bloquer le scan
-        logging.getLogger("bbma.app").warning("cycles indisponibles : %s", e)
-        cycles = {}
-    return out + (cycles,)
+    """Scan complet (signaux, tendances D1, RSI, ATR), mis en cache.
+    Retourne (res, trends, failed, total, ts, feats) ; feats contient le RSI et la distance ATR par (paire, TF)."""
+    return bn.scan_full(pairs, tfs, trend=True)   # version : fait partie de la clé de cache
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -355,13 +334,11 @@ def recent_entry(cells, tfs, feats, pair, use_filter, d1):
     return tf_e, code_e, sens_e, ages.get(tf_e, 0)
 
 
-def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None,
-                cycles=None) -> str:
-    """Tableau : Pair, timeframes, Entrée BBMA, Cycle, Confiance, Jauge, Nuclear, Qualité.
+def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None) -> str:
+    """Tableau : Pair, timeframes, Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
     Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
     nuc = nuc or {}
     strength = strength or {}
-    cycles = cycles or {}
     entries = []
     for p in pairs:
         cells, tf_tds = {}, []
@@ -382,10 +359,7 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         q_score, q_grade = bs.cap_grade(q_score, q_grade, kind)
         n = nuc.get(p)
         ghost = recent_entry(cells, tfs, feats, p, use_filter, d1) if show_recent and not tf_e else None
-        states = {t: cycles.get((p, t)) for t in tfs}
-        cyc_tf, cyc_state = bcy.best_cycle(states, tfs, sens_e)   # cycle le plus avancé (sens de l'entrée en priorité)
-        cyc_td = bcy.cycle_cell(cyc_state, cyc_tf, bcy.overview(states, tfs))
-        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind, ghost), cyc_td, conf_cell(score),
+        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind, ghost), conf_cell(score),
                         bg.gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail)]
         fr_status, fr_tip = bf.pair_status(p, feats, tfs)
         row = f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>'
@@ -397,7 +371,7 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
 
     head = ('<tr><th class="pair">Pair</th>'
             + "".join(f"<th>{t}</th>" for t in tfs)
-            + '<th class="s1 hmtf">Entrée BBMA</th><th class="s3 hmtf">Cycle</th><th class="s2 hmtf">Confiance</th>'
+            + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th>'
             + '<th class="s4 hmtf">Jauge</th><th class="s4 hmtf">Nuclear</th><th class="s3 hmtf">Qualité</th></tr>')
     return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
 
@@ -470,7 +444,7 @@ def main():
     @st.fragment(run_every=AUTO_REFRESH if auto else None)   # ne relance que cette partie
     def live():
         with st.spinner("Scan en cours..."):
-            res, trends, failed, total, ts, feats, nuc, cycles = run_scan(
+            res, trends, failed, total, ts, feats, nuc = run_scan(
                 tuple(pairs), tuple(tfs), SCAN_VERSION, st.session_state.get("refresh_nonce", 0))
             strength = run_strength(tuple(pairs), st.session_state.get("refresh_nonce", 0))
 
@@ -480,7 +454,7 @@ def main():
                 "Clique sur Rafraîchir dans quelques instants."
             )
 
-        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength, cycles),
+        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength),
                     unsafe_allow_html=True)
         legend_open = st.session_state.get("show_legend", False)
         st.button("Masquer la légende" if legend_open else "Afficher la légende",
