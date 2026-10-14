@@ -2,7 +2,7 @@
 
 La logique métier (téléchargement, détection, synthèse, confiance) est dans ``bbma_core``.
 La colonne Qualité est calculée par ``bbma_quality`` (poids dans ``bbma_quality_codes``).
-La jauge Buy/Sell (force générale de la paire) vient de TradingView via ``bbma_strength``.
+La jauge Buy/Sell (force générale de la paire) est calculée localement via ``bbma_techgauge``.
 Ce module ne gère que l'affichage et les paramètres de la barre latérale.
 
 Lancement : streamlit run app.py
@@ -16,7 +16,7 @@ import bbma_core as core
 import bbma_fresh as bf
 import bbma_session as bs
 import bbma_gauge as bg
-import bbma_strength as bst
+import bbma_techgauge as bst   # jauge locale gratuite (remplace bbma_strength / TradingView)
 import bbma_nuclear as bn
 import bbma_pairs as bp
 import bbma_quality as bq
@@ -116,7 +116,7 @@ def legend_html(show_recent=False) -> str:
         '<h4>Jauge Buy / Sell</h4>'
         '<div class="grad"></div>'
         '<div class="scale"><span>−100 vente forte</span><span>0</span><span>+100 achat fort</span></div>'
-        '<div class="note">Force générale de la paire (source TradingView, M15 à W1). Rouge à gauche : vente ; vert à droite : achat ; « S % / B % » : part des indicateurs vendeurs / acheteurs. Indépendante de BBMA.</div>'
+        '<div class="note">Force générale de la paire (calcul local à partir des indicateurs, M15 à W1). Rouge à gauche : vente ; vert à droite : achat ; « S % / B % » : part des indicateurs vendeurs / acheteurs. Indépendante de BBMA.</div>'
         '<h4>Qualité de l’entrée</h4>'
         f'<div class="chips"><span class="chip qa">A ≥ {GRADE_MIN["A"]}</span>'
         f'<span class="chip qb">B {GRADE_MIN["B"]} – {GRADE_MIN["A"] - 1}</span>'
@@ -244,7 +244,7 @@ def run_scan(pairs: tuple, tfs: tuple, version: int, nonce: int = 0):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def run_strength(pairs, nonce=0):
-    """Force Buy/Sell générale (TradingView), mise en cache 5 min ; nonce = bouton Rafraîchir."""
+    """Force Buy/Sell générale (calcul local), mise en cache 5 min ; nonce = bouton Rafraîchir."""
     return bst.fetch_strength(pairs)
 
 
@@ -352,7 +352,7 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, d1)
         avail = [t for t in tfs if feats.get((p, t)) is not None]   # TF sans données exclus
         score = bq.confiance_ponderee(cells, tfs, sens_e, avail)
-        gauge = strength.get(p)                       # force générale TradingView (None : « – »)
+        gauge = strength.get(p)                       # force générale locale (None : « – »)
         q_score, q_grade, q_detail = bq.qualite_entree(
             code_e, sens_e, score, d1, feats.get((p, tf_e)))
         kind = bs.entry_kind(cells, tfs, tf_e, code_e)
