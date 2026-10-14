@@ -49,7 +49,27 @@ def features_one(pair, tf, data):
         recent = core.recent_signal(df)      # dernier signal des bougies précédentes (affichage grisé)
     except Exception:
         recent = None
-    return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close, "recent": recent}
+    try:
+        recent_entry = recent_entry_signal(df)   # dernier RE / MHV récent (colonne Entrée BBMA, grisé)
+    except Exception:
+        recent_entry = None
+    return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close,
+            "recent": recent, "recent_entry": recent_entry}
+
+
+def recent_entry_signal(df, lookback=core.RECENT_BARS):
+    """Dernier signal d'ENTRÉE (RE ou MHV) parmi les `lookback` bougies qui précèdent la dernière :
+    (code, sens, age) ou None. Contrairement à core.recent_signal, un CSAK plus récent ne le masque pas.
+    Affichage uniquement."""
+    sig = core._signals(df)
+    for age in range(1, min(lookback, len(df) - 1) + 1):
+        for code in ("RE", "MHV"):
+            b, s = sig[code]
+            if b.iloc[-1 - age]:
+                return code, "B", age
+            if s.iloc[-1 - age]:
+                return code, "S", age
+    return None
 
 
 def _scan_one(pair, tf, data):
