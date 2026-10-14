@@ -61,21 +61,13 @@ def compute_gauge(cells, tfs, d1):
 
 
 def gauge_cell(g) -> str:
-    """Cellule « Jauge » sur deux lignes seulement (même hauteur qu'avant) : barre à deux moitiés
-    séparées (Sell rouge à gauche, Buy vert à droite, remplies depuis le centre selon le score), puis
-    une ligne « S x % ... B y % » avec la part des votes de chaque côté. Libellé et score : infobulle."""
+    """Cellule « Jauge » : barre de -100 à +100 avec curseur, libellé et détail au survol."""
     if g is None:
         return '<td class="gauge none">–</td>'
     score = g["score"]
-    buy_w = max(0, min(100, score))               # remplissage Buy (moitié droite)
-    sell_w = max(0, min(100, -score))             # remplissage Sell (moitié gauche)
-    buy_pct = int(g.get("buy_pct", 50))
-    sell_pct = 100 - buy_pct
-    s_dom = " dom" if score < 0 else ""           # le côté dominant est mis en gras
-    b_dom = " dom" if score > 0 else ""
-    tip = html.escape(f"{g['label']} · score {score:+d} · Buy {buy_pct}% / Sell {sell_pct}%")
+    pos = (score + 100) / 2                       # 0 % = vente forte, 100 % = achat fort
+    cls = "buy" if score > 0 else "sell" if score < 0 else "neutral"
+    tip = html.escape(f"{g['label']} · score {score:+d} · Buy {g['buy_pct']}% / Sell {100 - g['buy_pct']}%")
     return (f'<td class="gauge" title="{tip}">'
-            f'<div class="gbar"><div class="gh gs"><i style="width:{sell_w}%"></i></div>'
-            f'<div class="gh gb"><i style="width:{buy_w}%"></i></div></div>'
-            f'<div class="gsplit"><span class="gs{s_dom}">S {sell_pct}%</span>'
-            f'<span class="gb{b_dom}">B {buy_pct}%</span></div></td>')
+            f'<div class="gbar"><span class="gpt" style="left:{pos:.0f}%"></span></div>'
+            f'<div class="glab {cls}">{html.escape(g["label"])} {score:+d}</div></td>')

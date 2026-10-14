@@ -2,7 +2,7 @@
 
 La logique métier (téléchargement, détection, synthèse, confiance) est dans ``bbma_core``.
 La colonne Qualité est calculée par ``bbma_quality`` (poids dans ``bbma_quality_codes``).
-La jauge Buy/Sell (force générale de la paire) est calculée localement via ``bbma_techgauge``.
+La jauge Buy/Sell (force générale de la paire) vient de TradingView via ``bbma_strength``.
 Ce module ne gère que l'affichage et les paramètres de la barre latérale.
 
 Lancement : streamlit run app.py
@@ -16,7 +16,7 @@ import bbma_core as core
 import bbma_fresh as bf
 import bbma_session as bs
 import bbma_gauge as bg
-import bbma_techgauge as bst   # jauge locale gratuite (remplace bbma_strength / TradingView)
+import bbma_strength as bst
 import bbma_nuclear as bn
 import bbma_pairs as bp
 import bbma_quality as bq
@@ -59,7 +59,7 @@ LEGEND_CSS = """
 .bb-legend .chip.qb{background:#2962ff;color:#fff}
 .bb-legend .chip.tp{background:#2962ff;color:#fff}
 .bb-legend .sigs{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:3px 14px}
-.bb-legend .grad{height:8px;border-radius:4px;margin:6px 0 4px;background:linear-gradient(90deg,#ef5350 0 48%,transparent 48% 52%,#26a69a 52%)}
+.bb-legend .grad{height:8px;border-radius:4px;margin:6px 0 4px;background:linear-gradient(90deg,#ef5350,#2a2e39 50%,#26a69a)}
 .bb-legend .scale{display:flex;justify-content:space-between;font-size:11px;color:#787b86}
 .bb-legend .note{color:#787b86;font-size:12px;margin-top:4px}
 """
@@ -68,8 +68,7 @@ LEGEND_CSS = """
 def legend_html(show_recent=False) -> str:
     """Légende organisée par sections, avec les mêmes couleurs que le tableau."""
     recent_note = ('<div class="note">Texte grisé « CODE ▲ −n » : la dernière bougie n’a pas de signal ; c’est le dernier signal, '
-                   'n bougies plus tôt. Dans « Entrée BBMA », le même texte grisé donne la dernière entrée possible '
-                   '(information seulement, non utilisé par la synthèse, la confiance ni la qualité).</div>') if show_recent else ""
+                   'n bougies plus tôt (information seulement, non utilisé par la synthèse).</div>') if show_recent else ""
     sigs = [("MOM", "Momentum"), ("EXM", "Extreme Magic (MA10)"), ("EXT", "Extreme (MA5)"),
             ("MHV", "Market Hilang Volume"), ("CSAK", "Candle Arah Kukuh"), ("RE", "Reentry (strict)")]
     sigs_html = "".join(f"<div><b>{code}</b> · {name}</div>" for code, name in sigs)
@@ -116,7 +115,7 @@ def legend_html(show_recent=False) -> str:
         '<h4>Jauge Buy / Sell</h4>'
         '<div class="grad"></div>'
         '<div class="scale"><span>−100 vente forte</span><span>0</span><span>+100 achat fort</span></div>'
-        '<div class="note">Force générale de la paire (calcul local à partir des indicateurs, M15 à W1). Rouge à gauche : vente ; vert à droite : achat ; « S % / B % » : part des indicateurs vendeurs / acheteurs. Indépendante de BBMA.</div>'
+        '<div class="note">Force générale de la paire (source TradingView, M15 à W1, pondérée par timeframe). Indépendante de BBMA. Détail au survol.</div>'
         '<h4>Qualité de l’entrée</h4>'
         f'<div class="chips"><span class="chip qa">A ≥ {GRADE_MIN["A"]}</span>'
         f'<span class="chip qb">B {GRADE_MIN["B"]} – {GRADE_MIN["A"] - 1}</span>'
@@ -202,16 +201,12 @@ table.bb td.conf.low,table.bb td.conf.none{background:#2a2e39;color:#787b86}
 /* Jauge Buy / Sell */
 table.bb td.gauge{min-width:96px;max-width:116px;padding:8px 8px}
 table.bb td.gauge.none{background:#2a2e39;color:#787b86}
-table.bb .gbar{display:flex;gap:3px;height:10px}
-table.bb .gh{flex:1;display:flex;height:10px;border-radius:3px;overflow:hidden}
-table.bb .gh.gs{background:rgba(239,83,80,.22);justify-content:flex-end}
-table.bb .gh.gb{background:rgba(38,166,154,.22);justify-content:flex-start}
-table.bb .gh.gs i{background:#ef5350}
-table.bb .gh.gb i{background:#26a69a}
-table.bb .gsplit{display:flex;justify-content:space-between;margin-top:5px;height:14px;line-height:14px;font-size:12px;font-weight:500}
-table.bb .gsplit .gs{color:#ef5350;opacity:.8}
-table.bb .gsplit .gb{color:#26a69a;opacity:.8}
-table.bb .gsplit .dom{font-weight:700;opacity:1}
+table.bb .gbar{position:relative;height:10px;border-radius:4px;background:linear-gradient(90deg,#ef5350,#2a2e39 50%,#26a69a)}
+table.bb .gpt{position:absolute;top:-3px;width:4px;height:14px;border-radius:2px;background:#fff;transform:translateX(-50%)}
+table.bb .glab{margin-top:5px;font-size:12px;font-weight:700}
+table.bb .glab.buy{color:#26a69a}
+table.bb .glab.sell{color:#ef5350}
+table.bb .glab.neutral{color:#787b86}
 /* Nuclear (direction, score, timeframes ; couleur et intensité posées en ligne) */
 table.bb td.nuc{font-weight:700;font-size:13px;min-width:112px;max-width:140px;padding:8px 10px;white-space:normal;line-height:1.3}
 table.bb td.nuc.none{background:#2a2e39;color:#787b86}
@@ -244,7 +239,7 @@ def run_scan(pairs: tuple, tfs: tuple, version: int, nonce: int = 0):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def run_strength(pairs, nonce=0):
-    """Force Buy/Sell générale (calcul local), mise en cache 5 min ; nonce = bouton Rafraîchir."""
+    """Force Buy/Sell générale (TradingView), mise en cache 5 min ; nonce = bouton Rafraîchir."""
     return bst.fetch_strength(pairs)
 
 
@@ -278,18 +273,9 @@ def cell_html(code, direction, rsi_value, recent=None) -> str:
             f'<div><b>{code}</b> {ARROW[direction]}{tpw}</div>{sub}</td>')
 
 
-def synth_cell(tf, code, direction, kind=None, ghost=None) -> str:
-    """Cellule « Entrée BBMA » : timeframe, signal, sens et nature de l'entrée (pullback ou poursuite).
-    ghost : (tf, code, sens, age) de la dernière entrée récente, affichée en grisé quand il n'y a pas d'entrée."""
+def synth_cell(tf, code, direction, kind=None) -> str:
+    """Cellule « Entrée BBMA » : timeframe, signal, sens et nature de l'entrée (pullback ou poursuite)."""
     if not tf:
-        if ghost:
-            gtf, gcode, gdir, age = ghost
-            side = "Buy" if gdir == "B" else "Sell"
-            when = f"il y a {age} bougie(s) sur {gtf}" if age else f"signal actuel sur {gtf}, direction récente"
-            tip = (f"Aucune entrée sur la dernière bougie · dernière entrée possible : {NAMES.get(gcode, gcode)} "
-                   f"· {side}, {when} (information seulement)")
-            txt = f"{gtf} {gcode} {ARROW[gdir]}" + (f" −{age}" if age else "")
-            return f'<td class="synth s1 none" title="{tip}"><div class="ghost">{txt}</div></td>'
         return '<td class="synth s1 none">–</td>'
     cls = "buy" if direction == "B" else "sell"
     side = "Buy" if direction == "B" else "Sell"
@@ -312,28 +298,6 @@ def conf_cell(score) -> str:
     return f'<td class="conf s2 {cls}">{pct}%</td>'
 
 
-def recent_entry(cells, tfs, feats, pair, use_filter, d1):
-    """Dernière entrée « récente » (affichage grisé, information seulement) : même synthèse que l'entrée,
-    mais les timeframes sans signal sur la dernière bougie reprennent leur dernier signal récent.
-    Retourne (tf, code, sens, age) ou None. N'est jamais utilisée par Confiance, Qualité, Jauge ni le tri."""
-    filled, ages = {}, {}
-    for t in tfs:
-        code, d = cells[t]
-        if code:
-            filled[t] = (code, d)
-            continue
-        rec = (feats.get((pair, t)) or {}).get("recent")
-        if rec:
-            filled[t] = (rec[0], rec[1])
-            ages[t] = rec[2]
-        else:
-            filled[t] = (None, None)
-    tf_e, code_e, sens_e = core.synthese(filled, tfs, use_filter, d1)
-    if not tf_e:
-        return None
-    return tf_e, code_e, sens_e, ages.get(tf_e, 0)
-
-
 def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None) -> str:
     """Tableau : Pair, timeframes, Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
     Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
@@ -352,14 +316,13 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, d1)
         avail = [t for t in tfs if feats.get((p, t)) is not None]   # TF sans données exclus
         score = bq.confiance_ponderee(cells, tfs, sens_e, avail)
-        gauge = strength.get(p)                       # force générale locale (None : « – »)
+        gauge = strength.get(p)                       # force générale TradingView (None : « – »)
         q_score, q_grade, q_detail = bq.qualite_entree(
             code_e, sens_e, score, d1, feats.get((p, tf_e)))
         kind = bs.entry_kind(cells, tfs, tf_e, code_e)
         q_score, q_grade = bs.cap_grade(q_score, q_grade, kind)
         n = nuc.get(p)
-        ghost = recent_entry(cells, tfs, feats, p, use_filter, d1) if show_recent and not tf_e else None
-        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind, ghost), conf_cell(score),
+        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind), conf_cell(score),
                         bg.gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail)]
         fr_status, fr_tip = bf.pair_status(p, feats, tfs)
         row = f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>'
@@ -425,7 +388,7 @@ def sidebar_settings():
     tfs = st.sidebar.multiselect("Timeframes", list(core.TFS), list(core.TFS))
     use_filter = st.sidebar.checkbox("Filtre D1 (EMA50)", True)
     show_recent = st.sidebar.checkbox("Afficher les signaux récents (grisés)", False,
-                                      help="Dernier signal des bougies précédentes quand la dernière n'en a pas, y compris dans la colonne Entrée BBMA. Information seulement.")
+                                      help="Dernier signal des bougies précédentes quand la dernière n'en a pas. Information seulement.")
     auto = st.sidebar.checkbox(f"Scan automatique toutes les {AUTO_REFRESH // 60} min", True)
     if st.sidebar.button("Rafraîchir"):
         st.session_state["refresh_nonce"] = st.session_state.get("refresh_nonce", 0) + 1
