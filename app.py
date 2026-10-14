@@ -208,13 +208,10 @@ table.bb .gh.gs{background:rgba(239,83,80,.22);justify-content:flex-end}
 table.bb .gh.gb{background:rgba(38,166,154,.22);justify-content:flex-start}
 table.bb .gh.gs i{background:#ef5350}
 table.bb .gh.gb i{background:#26a69a}
-table.bb .glab{margin-top:5px;font-size:12px;font-weight:700}
-table.bb .glab.buy{color:#26a69a}
-table.bb .glab.sell{color:#ef5350}
-table.bb .glab.neutral{color:#787b86}
-table.bb .gsplit{display:flex;justify-content:space-between;margin-top:3px;font-size:10px;font-weight:600}
-table.bb .gsplit .gs{color:#ef5350}
-table.bb .gsplit .gb{color:#26a69a}
+table.bb .gsplit{display:flex;justify-content:space-between;margin-top:5px;height:14px;line-height:14px;font-size:12px;font-weight:500}
+table.bb .gsplit .gs{color:#ef5350;opacity:.8}
+table.bb .gsplit .gb{color:#26a69a;opacity:.8}
+table.bb .gsplit .dom{font-weight:700;opacity:1}
 /* Nuclear (direction, score, timeframes ; couleur et intensité posées en ligne) */
 table.bb td.nuc{font-weight:700;font-size:13px;min-width:112px;max-width:140px;padding:8px 10px;white-space:normal;line-height:1.3}
 table.bb td.nuc.none{background:#2a2e39;color:#787b86}
