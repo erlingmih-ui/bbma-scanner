@@ -2,7 +2,7 @@
 
 La logique métier (téléchargement, détection, synthèse, confiance) est dans ``bbma_core``.
 La colonne Qualité est calculée par ``bbma_quality`` (poids dans ``bbma_quality_codes``).
-La jauge Buy/Sell est calculée par ``bbma_gauge``.
+La jauge Buy/Sell (force générale de la paire) vient de TradingView via ``bbma_strength``.
 Ce module ne gère que l'affichage et les paramètres de la barre latérale.
 
 Lancement : streamlit run app.py
@@ -16,6 +16,7 @@ import bbma_core as core
 import bbma_fresh as bf
 import bbma_session as bs
 import bbma_gauge as bg
+import bbma_strength as bst
 import bbma_nuclear as bn
 import bbma_pairs as bp
 import bbma_quality as bq
@@ -114,7 +115,7 @@ def legend_html(show_recent=False) -> str:
         '<h4>Jauge Buy / Sell</h4>'
         '<div class="grad"></div>'
         '<div class="scale"><span>−100 vente forte</span><span>0</span><span>+100 achat fort</span></div>'
-        '<div class="note">Pondérée par timeframe, force du signal et tendance D1. Détail au survol.</div>'
+        '<div class="note">Force générale de la paire (source TradingView, M15 à W1, pondérée par timeframe). Indépendante de BBMA. Détail au survol.</div>'
         '<h4>Qualité de l’entrée</h4>'
         f'<div class="chips"><span class="chip qa">A ≥ {GRADE_MIN["A"]}</span>'
         f'<span class="chip qb">B {GRADE_MIN["B"]} – {GRADE_MIN["A"] - 1}</span>'
@@ -236,6 +237,12 @@ def run_scan(pairs: tuple, tfs: tuple, version: int, nonce: int = 0):
     return bn.scan_full(pairs, tfs, trend=True)   # version : fait partie de la clé de cache
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def run_strength(pairs, nonce=0):
+    """Force Buy/Sell générale (TradingView), mise en cache 5 min ; nonce = bouton Rafraîchir."""
+    return bst.fetch_strength(pairs)
+
+
 def rsi_html(value) -> str:
     """Valeur RSI sous la cellule : couleur uniquement pour les extrêmes."""
     if value is None:
@@ -291,10 +298,11 @@ def conf_cell(score) -> str:
     return f'<td class="conf s2 {cls}">{pct}%</td>'
 
 
-def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None) -> str:
+def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None) -> str:
     """Tableau : Pair, timeframes, Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
     Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
     nuc = nuc or {}
+    strength = strength or {}
     entries = []
     for p in pairs:
         cells, tf_tds = {}, []
@@ -308,7 +316,7 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, d1)
         avail = [t for t in tfs if feats.get((p, t)) is not None]   # TF sans données exclus
         score = bq.confiance_ponderee(cells, tfs, sens_e, avail)
-        gauge = bg.compute_gauge(cells, tfs, d1)
+        gauge = strength.get(p)                       # force générale TradingView (None : « – »)
         q_score, q_grade, q_detail = bq.qualite_entree(
             code_e, sens_e, score, d1, feats.get((p, tf_e)))
         kind = bs.entry_kind(cells, tfs, tf_e, code_e)
@@ -401,6 +409,7 @@ def main():
         with st.spinner("Scan en cours..."):
             res, trends, failed, total, ts, feats, nuc = run_scan(
                 tuple(pairs), tuple(tfs), SCAN_VERSION, st.session_state.get("refresh_nonce", 0))
+            strength = run_strength(tuple(pairs), st.session_state.get("refresh_nonce", 0))
 
         if failed:
             st.warning(
@@ -408,7 +417,8 @@ def main():
                 "Clique sur Rafraîchir dans quelques instants."
             )
 
-        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc), unsafe_allow_html=True)
+        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength),
+                    unsafe_allow_html=True)
         legend_open = st.session_state.get("show_legend", False)
         st.button("Masquer la légende" if legend_open else "Afficher la légende",
                   key="btn_legend", on_click=_toggle_legend)
