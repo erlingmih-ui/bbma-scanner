@@ -1,9 +1,9 @@
 """Logique pure du scanner BBMA : données, détection, synthèse. Aucune dépendance à Streamlit.
 
 Version corrigée (audit Oma Ally, points 1 et 2) :
-  1. Cycle Extreme -> MHV -> CSAK -> RE : le Reentry n'est armé que si un Extreme ou un MHV du même côté
-     a précédé (RE_REQUIRE_CYCLE), l'armement expire (RE_ARM_MAX_BARS) et tombe sur un Extreme / MHV
-     contraire ou sur une cassure de la Mid BB.
+  1. Cycle Extreme -> MHV -> CSAK -> RE : l'armement du Reentry expire (RE_ARM_MAX_BARS) et tombe sur un
+     Extreme / MHV contraire ou sur une cassure de la Mid BB. L'exigence d'un Extreme / MHV préalable du
+     même côté (RE_REQUIRE_CYCLE) est disponible mais désactivée par défaut : elle supprime ~80 % des RE.
   2. CSAK = événement (première bougie) valable CSAK_VALID_BARS bougies, et non plus un état permanent ;
      la synthèse refuse l'entrée si un timeframe intermédiaire (entre directeur et entrée) contredit.
 Tous les paramètres sont plus bas ; chacun peut être désactivé pour retrouver l'ancien comportement.
@@ -75,7 +75,7 @@ CSAK_EVENT_ONLY = True
 CSAK_VALID_BARS = 3
 # Le RE n'est armé que si un Extreme ou un MHV du même côté a eu lieu dans les CYCLE_WINDOW bougies
 # précédentes (achat : Extreme sur la bande basse ; vente : sur la bande haute). False = ancien comportement.
-RE_REQUIRE_CYCLE = True
+RE_REQUIRE_CYCLE = False     # False (défaut) : plus d'entrées ; True : cycle Oma Ally strict
 CYCLE_WINDOW = 40
 # Armement par MOM (clôture hors BB) en plus du CSAK. False : seul le CSAK arme le RE (cycle strict).
 RE_ARM_BY_MOM = False
