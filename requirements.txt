@@ -2,4 +2,3 @@ streamlit==1.65.0
 yfinance==1.7.0
 pandas==3.0.2
 numpy==2.4.4
-tradingview_ta==3.3.0
