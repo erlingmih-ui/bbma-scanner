@@ -348,6 +348,26 @@ def recent_entry(cells, tfs, feats, pair, use_filter, d1):
     return best[1] if best else None
 
 
+def gauge_cell(g) -> str:
+    """Cellule « Jauge » : barre à deux moitiés (Sell rouge à gauche, Buy vert à droite, remplies depuis le centre),
+    puis « S x % / B y % ». Définie ici pour ne pas dépendre de la version de bbma_gauge.py. Libellé et score : infobulle."""
+    if g is None:
+        return '<td class="gauge none">–</td>'
+    score = int(g["score"])
+    buy_w = max(0, min(100, score))
+    sell_w = max(0, min(100, -score))
+    buy_pct = int(g.get("buy_pct", 50))
+    sell_pct = 100 - buy_pct
+    s_dom = " dom" if score < 0 else ""
+    b_dom = " dom" if score > 0 else ""
+    tip = html.escape(f"{g.get('label', '')} · score {score:+d} · Buy {buy_pct}% / Sell {sell_pct}%")
+    return (f'<td class="gauge" title="{tip}">'
+            f'<div class="gbar"><div class="gh gs"><i style="width:{sell_w}%"></i></div>'
+            f'<div class="gh gb"><i style="width:{buy_w}%"></i></div></div>'
+            f'<div class="gsplit"><span class="gs{s_dom}">S {sell_pct}%</span>'
+            f'<span class="gb{b_dom}">B {buy_pct}%</span></div></td>')
+
+
 def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None) -> str:
     """Tableau : Pair, timeframes, Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
     Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
@@ -374,7 +394,7 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         n = nuc.get(p)
         ghost = recent_entry(cells, tfs, feats, p, use_filter, d1) if show_recent and not tf_e else None
         tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind, ghost), conf_cell(score),
-                        bg.gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail)]
+                        gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail)]
         fr_status, fr_tip = bf.pair_status(p, feats, tfs)
         row = f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>'
         force, nscore = bn.sort_key(n)
