@@ -1,4 +1,13 @@
-"""Logique pure du scanner BBMA : données, détection, synthèse. Aucune dépendance à Streamlit."""
+"""Logique pure du scanner BBMA : données, détection, synthèse. Aucune dépendance à Streamlit.
+
+Version corrigée (audit Oma Ally, points 1 et 2) :
+  1. Cycle Extreme -> MHV -> CSAK -> RE : le Reentry n'est armé que si un Extreme ou un MHV du même côté
+     a précédé (RE_REQUIRE_CYCLE), l'armement expire (RE_ARM_MAX_BARS) et tombe sur un Extreme / MHV
+     contraire ou sur une cassure de la Mid BB.
+  2. CSAK = événement (première bougie) valable CSAK_VALID_BARS bougies, et non plus un état permanent ;
+     la synthèse refuse l'entrée si un timeframe intermédiaire (entre directeur et entrée) contredit.
+Tous les paramètres sont plus bas ; chacun peut être désactivé pour retrouver l'ancien comportement.
+"""
 import logging
 import re
 import threading
@@ -58,6 +67,29 @@ MHV_REQUIRE_REVERSE_CANDLE = True
 # (le premier retest consomme l'armement).
 RE_SECOND_RETEST_IF_UNCONFIRMED = False
 
+# --- Correction 1 : machine d'états du cycle BBMA (Extreme -> MHV -> CSAK -> RE) ---
+# CSAK n'est plus vrai sur chaque bougie de tendance : seule la 1re bougie (front montant) compte,
+# et le signal reste affiché CSAK_VALID_BARS bougies (1 = la bougie de cassure seule), tant que la condition tient.
+# False = ancien comportement (état permanent).
+CSAK_EVENT_ONLY = True
+CSAK_VALID_BARS = 3
+# Le RE n'est armé que si un Extreme ou un MHV du même côté a eu lieu dans les CYCLE_WINDOW bougies
+# précédentes (achat : Extreme sur la bande basse ; vente : sur la bande haute). False = ancien comportement.
+RE_REQUIRE_CYCLE = True
+CYCLE_WINDOW = 40
+# Armement par MOM (clôture hors BB) en plus du CSAK. False : seul le CSAK arme le RE (cycle strict).
+RE_ARM_BY_MOM = False
+# Durée de vie de l'armement, en bougies. 0 = illimitée (ancien comportement).
+RE_ARM_MAX_BARS = 30
+# L'armement tombe sur un Extreme ou un MHV du côté contraire (objectif atteint : TP Wajib).
+RE_DISARM_ON_OPPOSITE = True
+# L'armement tombe si la clôture passe du mauvais côté de la Mid BB (tendance perdue).
+RE_DISARM_ON_MID_BREAK = True
+
+# --- Correction 2 : contrôle des timeframes intermédiaires dans la synthèse ---
+# Un signal contraire sur un TF situé entre le directeur et le TF d'entrée annule l'entrée.
+CHECK_INTERMEDIATE_TFS = True
+
 # Cache disque des bougies : un fichier Parquet par (paire, intervalle), dans ./cache à côté de ce module.
 # Les bougies fermées sont conservées et s'accumulent d'un lancement à l'autre.
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
@@ -80,24 +112,41 @@ def wma(s, n):
     return pd.Series(out, index=s.index)
 
 
-def _reentry(c, h, l, mid, zl_b, zh_b, zl_s, zh_s, dir_b, dir_s):
+def _reentry(c, h, l, mid, zl_b, zh_b, zl_s, zh_s, arm_b, arm_s, kill_b, kill_s):
     """Reentry (RE) : (série buy, série sell) d'entrée, décalées d'une bougie.
 
-    Armé par un signal directionnel, consommé au premier retest. Le retest est validé si
-    la confirmation Mid BB (si RE_USE_MID_BB) est respectée ; l'entrée est sur la bougie suivante.
+    Machine d'états par côté :
+      - armée par arm_* (CSAK en événement, éventuellement MOM, après un Extreme / MHV du même côté) ;
+      - désarmée par kill_* (Extreme / MHV contraire), par l'armement du côté opposé, par la cassure
+        de la Mid BB (RE_DISARM_ON_MID_BREAK) ou à l'expiration (RE_ARM_MAX_BARS) ;
+      - le premier retest de la zone MA5/10 consomme l'armement ; il est validé si la confirmation
+        Mid BB (RE_USE_MID_BB) est respectée ; l'entrée est sur la bougie suivante.
+    L'ordre à chaque bougie est : invalidations, retest, puis armement (calcul causal).
     """
     n = len(c)
     C, H, L, MID = c.to_numpy(float), h.to_numpy(float), l.to_numpy(float), mid.to_numpy(float)
     ZLB, ZHB = zl_b.to_numpy(float), zh_b.to_numpy(float)
     ZLS, ZHS = zl_s.to_numpy(float), zh_s.to_numpy(float)
-    DB, DS = dir_b.to_numpy(bool), dir_s.to_numpy(bool)
+    AB, AS = arm_b.to_numpy(bool), arm_s.to_numpy(bool)
+    KB, KS = kill_b.to_numpy(bool), kill_s.to_numpy(bool)
     confirm_b = np.zeros(n, bool)
     confirm_s = np.zeros(n, bool)
     armed_b = armed_s = False
+    since_b = since_s = 0
     for i in range(1, n):
-        # Retest achat : 1er retour dans la zone MA Low depuis le haut
+        # 1. Invalidations de l'armement
+        if armed_b:
+            since_b += 1
+            if (RE_DISARM_ON_OPPOSITE and KB[i]) or (RE_DISARM_ON_MID_BREAK and C[i] < MID[i]) \
+                    or (RE_ARM_MAX_BARS and since_b > RE_ARM_MAX_BARS):
+                armed_b = False
+        if armed_s:
+            since_s += 1
+            if (RE_DISARM_ON_OPPOSITE and KS[i]) or (RE_DISARM_ON_MID_BREAK and C[i] > MID[i]) \
+                    or (RE_ARM_MAX_BARS and since_s > RE_ARM_MAX_BARS):
+                armed_s = False
+        # 2. Retest achat : 1er retour dans la zone MA Low depuis le haut
         if armed_b and C[i-1] > ZHB[i-1] and L[i] <= ZHB[i] and C[i] >= ZHB[i]:
-            # Retest touche la zone, clôture ne passe pas les MA5/MA10 Low
             confirmed = (not RE_USE_MID_BB) or C[i] >= MID[i]
             if confirmed:
                 confirm_b[i] = True
@@ -105,17 +154,16 @@ def _reentry(c, h, l, mid, zl_b, zh_b, zl_s, zh_s, dir_b, dir_s):
                 armed_b = False
         # Retest vente : 1er retour dans la zone MA High depuis le bas
         if armed_s and C[i-1] < ZLS[i-1] and H[i] >= ZLS[i] and C[i] <= ZLS[i]:
-            # Retest touche la zone, clôture ne passe pas les MA5/MA10 High
             confirmed = (not RE_USE_MID_BB) or C[i] <= MID[i]
             if confirmed:
                 confirm_s[i] = True
             if confirmed or not RE_SECOND_RETEST_IF_UNCONFIRMED:
                 armed_s = False
-        # Armement par signal directionnel ; le sens opposé désarme
-        if DB[i]:
-            armed_b, armed_s = True, False
-        elif DS[i]:
-            armed_s, armed_b = True, False
+        # 3. Armement ; le sens opposé désarme
+        if AB[i]:
+            armed_b, armed_s, since_b = True, False, 0
+        elif AS[i]:
+            armed_s, armed_b, since_s = True, False, 0
     re_b = pd.Series(np.roll(confirm_b, 1), index=c.index); re_b.iloc[0] = False
     re_s = pd.Series(np.roll(confirm_s, 1), index=c.index); re_s.iloc[0] = False
     return re_b, re_s
@@ -137,17 +185,30 @@ def _signals(df, lb=15):
     rev_b = (c > o) if MHV_REQUIRE_REVERSE_CANDLE else True
     mhv_s = rec(any_s.shift(1), lb) & (h >= top) & (c < top) & rev_s            # MHV (fenêtre 15 bougies)
     mhv_b = rec(any_b.shift(1), lb) & (l <= low) & (c > low) & rev_b
-    arah_s = (c < mid) & (c < l5) & (c < l10)                                   # CSAK / Candle Arah
-    arah_b = (c > mid) & (c > h5) & (c > h10)
-    # tendance mémorisée (m_lastTrendDir) : dernier MOM / Arah
-    trend = pd.Series(np.where(mom_b | arah_b, 1, np.where(mom_s | arah_s, -1, np.nan)), index=c.index).ffill()
+    arah_s_raw = (c < mid) & (c < l5) & (c < l10)                               # CSAK / Candle Arah (condition)
+    arah_b_raw = (c > mid) & (c > h5) & (c > h10)
+    # Correction 2 : CSAK = événement (1re bougie où la condition devient vraie), valable CSAK_VALID_BARS bougies.
+    ev_s = arah_s_raw & ~arah_s_raw.shift(1, fill_value=False)
+    ev_b = arah_b_raw & ~arah_b_raw.shift(1, fill_value=False)
+    if CSAK_EVENT_ONLY:
+        arah_s, arah_b = arah_s_raw & rec(ev_s, CSAK_VALID_BARS), arah_b_raw & rec(ev_b, CSAK_VALID_BARS)
+    else:
+        arah_s, arah_b = arah_s_raw, arah_b_raw
+        ev_s, ev_b = arah_s_raw, arah_b_raw
     # Zones MA5/MA10
     zone_buy_hi, zone_buy_lo = np.maximum(l5, l10), np.minimum(l5, l10)
     zone_sell_hi, zone_sell_lo = np.maximum(h5, h10), np.minimum(h5, h10)
 
-    # RE : machine à états (voir _reentry et RE_USE_MID_BB)
+    # Correction 1 : cycle Extreme -> MHV -> CSAK -> RE. Le RE n'est armé qu'après un Extreme / MHV du même côté.
+    no = pd.Series(False, index=c.index)
+    cyc_b = rec(any_b | mhv_b, CYCLE_WINDOW) if RE_REQUIRE_CYCLE else ~no
+    cyc_s = rec(any_s | mhv_s, CYCLE_WINDOW) if RE_REQUIRE_CYCLE else ~no
+    arm_b = (ev_b | (mom_b if RE_ARM_BY_MOM else no)) & cyc_b
+    arm_s = (ev_s | (mom_s if RE_ARM_BY_MOM else no)) & cyc_s
+    kill_b = any_s | mhv_s          # Extreme / MHV de vente : l'achat a atteint son objectif
+    kill_s = any_b | mhv_b
     re_b, re_s = _reentry(c, h, l, mid, zone_buy_lo, zone_buy_hi, zone_sell_lo, zone_sell_hi,
-                          mom_b | arah_b, mom_s | arah_s)
+                          arm_b, arm_s, kill_b, kill_s)
 
     return {"MOM": (mom_b, mom_s), "EXM": (exm_b, exm_s), "EXT": (ext_b, ext_s),
             "MHV": (mhv_b, mhv_s), "CSAK": (arah_b, arah_s), "RE": (re_b, re_s)}
@@ -184,10 +245,13 @@ def recent_signal(df, lookback=RECENT_BARS, lb=15):
     return None
 
 
-def synthese(cells, tf_dispo, use_filter, d1_trend):
-    """Synthèse multi-TF BBMA Oma Ally.
+def synthese_why(cells, tf_dispo, use_filter, d1_trend):
+    """Synthèse multi-TF BBMA Oma Ally, avec le motif en cas de refus.
     cells : {tf: (code, sens)} ; tf_dispo : TF scannés ; d1_trend : 'B', 'S' ou None.
-    Retourne (tf_entree, code_entree, sens) ou (None, None, None)."""
+    Retourne ((tf_entree, code_entree, sens) ou (None, None, None), motif).
+    Motifs : 'ok', 'aucun_directeur', 'tf_superieur_contraire', 'filtre_d1',
+             'tf_intermediaire_contraire', 'aucune_entree'."""
+    none = (None, None, None)
     tfs_ord = [t for t in TF_ORDER if t in tf_dispo]
 
     # 1. TF directeur : le plus haut TF ayant un signal de structure
@@ -197,31 +261,42 @@ def synthese(cells, tf_dispo, use_filter, d1_trend):
             idx = i
             break
     if idx is None:
-        return None, None, None
+        return none, "aucun_directeur"
     tf_dir = tfs_ord[idx]
     code_dir, sens = cells[tf_dir]
 
-    # 4. Un TF supérieur au directeur qui contredit le sens -> pas de trade
+    # 2. Un TF supérieur au directeur qui contredit le sens -> pas de trade
     for t in tfs_ord[:idx]:
         code, d = cells.get(t, (None, None))
         if code and d != sens:
-            return None, None, None
+            return none, "tf_superieur_contraire"
 
-    # 5. Filtre D1 (EMA50) : sens contre la tendance D1 -> pas de trade
+    # 3. Filtre D1 (EMA50) : sens contre la tendance D1 -> pas de trade
     if use_filter and d1_trend and d1_trend != sens:
-        return None, None, None
+        return none, "filtre_d1"
 
-    # 2. TF d'entrée plus bas que le directeur, même sens (le plus proche du directeur)
-    for t in tfs_ord[idx + 1:]:
+    # 4. TF d'entrée plus bas que le directeur, même sens (le plus proche du directeur).
+    #    Correction 2 : un signal contraire sur un TF situé entre le directeur et l'entrée annule le trade.
+    #    Tout TF d'entrée plus bas traverserait ce même TF intermédiaire : inutile de chercher plus loin.
+    for j in range(idx + 1, len(tfs_ord)):
+        t = tfs_ord[j]
         code, d = cells.get(t, (None, None))
         if code in SIG_ENTREE and d == sens:
-            return t, code, sens
+            return (t, code, sens), "ok"
+        if CHECK_INTERMEDIATE_TFS and code and d != sens:
+            return none, "tf_intermediaire_contraire"
 
-    # 3. Aucun TF d'entrée trouvé : le directeur sert d'entrée seulement s'il est lui-même un setup
+    # 5. Aucun TF d'entrée trouvé : le directeur sert d'entrée seulement s'il est lui-même un setup
     #    d'entrée (RE/MHV), ou si le repli « poursuite » est activé.
     if ALLOW_CHASE_FALLBACK or code_dir in SIG_ENTREE:
-        return tf_dir, code_dir, sens
-    return None, None, None
+        return (tf_dir, code_dir, sens), "ok"
+    return none, "aucune_entree"
+
+
+def synthese(cells, tf_dispo, use_filter, d1_trend):
+    """Synthèse multi-TF BBMA Oma Ally.
+    Retourne (tf_entree, code_entree, sens) ou (None, None, None). Voir synthese_why pour le motif."""
+    return synthese_why(cells, tf_dispo, use_filter, d1_trend)[0]
 
 
 def confiance_score(cells, tfs, sens_ref):
