@@ -10,7 +10,7 @@ timeframe (poids de ``bbma_gauge.TF_WEIGHT``).
 
 Robustesse : aucune fonction publique ne lève d'exception. Si le paquet est absent, si TradingView ne
 répond pas ou si une paire est inconnue, la paire vaut None et la cellule affiche « – ».
-Les symboles et places de marché sont dans PAIR_MAP : à ajuster si une paire reste vide.
+Les chemins (screener, place de marché) sont dans DEFAULT_ROUTES et PAIR_MAP : à ajuster si une paire reste vide.
 """
 import logging
 
@@ -35,19 +35,20 @@ INTERVALS = (
 MIN_INTERVALS = 3          # au-dessous, la « force générale » n'est pas fiable : pas de jauge
 TIMEOUT = 8                # secondes par requête
 
-# Par défaut : forex sur FX_IDC puis OANDA.
-DEFAULT_ROUTE = ("forex", ("FX_IDC", "OANDA"))
-# Exceptions : paire -> (screener, places de marché essayées dans l'ordre)
+# Chemins essayés dans l'ordre : (screener TradingView, place de marché). Dès qu'un chemin répond
+# pour une paire, les suivants ne sont pas utilisés pour elle.
+DEFAULT_ROUTES = (("forex", "FX_IDC"), ("forex", "OANDA"))
+# Exceptions. L'or et l'argent sont classés « cfd » par TradingView, d'où plusieurs chemins.
 PAIR_MAP = {
-    "XAUUSD": ("forex", ("OANDA", "FX_IDC")),
-    "XAGUSD": ("forex", ("OANDA", "FX_IDC")),
-    "BTCUSD": ("crypto", ("BITSTAMP", "COINBASE")),
+    "XAUUSD": (("cfd", "OANDA"), ("forex", "OANDA"), ("cfd", "FOREXCOM"), ("forex", "FX_IDC")),
+    "XAGUSD": (("cfd", "OANDA"), ("forex", "OANDA"), ("cfd", "FOREXCOM"), ("forex", "FX_IDC")),
+    "BTCUSD": (("crypto", "BITSTAMP"), ("crypto", "COINBASE")),
 }
 
 
-def route(pair):
-    """(screener, places de marché) d'une paire."""
-    return PAIR_MAP.get(pair, DEFAULT_ROUTE)
+def routes(pair):
+    """Chemins (screener, place de marché) d'une paire, par ordre de priorité."""
+    return PAIR_MAP.get(pair, DEFAULT_ROUTES)
 
 
 def interval_score(summary):
@@ -79,18 +80,17 @@ def aggregate(per_tf):
 
 
 def _fetch_interval(pairs, interval):
-    """{paire: (score, buy, sell)} pour un timeframe. Essaie les places de marché de rang 0, 1, ..."""
+    """{paire: (score, buy, sell)} pour un timeframe. Essaie les chemins de rang 0, 1, ... des paires manquantes."""
     out = {}
-    for rank in range(2):
+    max_rank = max(len(routes(p)) for p in pairs) if pairs else 0
+    for rank in range(max_rank):
         groups = {}                                   # screener -> {"EXCH:PAIR": paire}
         for p in pairs:
-            if p in out:
+            r = routes(p)
+            if p in out or rank >= len(r):
                 continue
-            screener, exchanges = route(p)
-            if rank < len(exchanges):
-                groups.setdefault(screener, {})[f"{exchanges[rank]}:{p}"] = p
-        if not groups:
-            break
+            screener, exchange = r[rank]
+            groups.setdefault(screener, {})[f"{exchange}:{p}"] = p
         for screener, mapping in groups.items():
             try:
                 res = get_multiple_analysis(screener=screener, interval=interval,
