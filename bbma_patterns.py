@@ -5,6 +5,11 @@ Chaque timeframe affiche sa lettre, colorée selon le sens (vert = achat, rouge 
 Sous les pastilles, une ligne de lecture : sens majoritaire et nombre de TF actifs (ex. « ▲ 3/3 »).
 « ⇅ » signale que les TF ne vont pas tous dans le même sens.
 
+Filtre : la colonne n'affiche QUE les patterns de PATTERN_CODES (par défaut REM, RRE, REE), lus dans l'ordre
+des timeframes (D1 → H4 → H1 : la 1re lettre est le TF le plus haut). Aucun autre pattern n'est affiché : la
+cellule reste vide (« – ») et l'infobulle donne la lecture actuelle. PATTERN_CODES = None : tous les patterns.
+REQUIRE_SAME_SIDE = True : le pattern doit en plus aller dans le même sens (achat ou vente) sur les 3 TF.
+
 Choix des 3 timeframes (PATTERN_TFS) :
   - par défaut D1, H4, H1, à condition qu'ils soient cochés dans la barre latérale ;
   - s'il en manque, on complète avec les autres timeframes cochés (du plus haut au plus bas) ;
@@ -28,6 +33,8 @@ import bbma_core as core
 # --- Paramètres -------------------------------------------------------------------------------
 PATTERN_TFS = ("D1", "H4", "H1")       # None : les N timeframes cochés les plus hauts
 N_TFS = 3
+PATTERN_CODES = ("REM", "RRE", "REE")   # R = Reentry, E = Extreme, M = MHV ; None : aucun filtre
+REQUIRE_SAME_SIDE = True                # les 3 lettres doivent aller dans le même sens (achat ou vente)
 
 LETTER = {"RE": "R", "EXM": "E", "EXT": "E", "MHV": "M", "CSAK": "C", "MOM": "O"}
 CODE_NAMES = {
@@ -55,7 +62,8 @@ def select_tfs(tfs, preferred=PATTERN_TFS, n=N_TFS):
     return [t for t in core.TF_ORDER if t in chosen][:n]
 
 
-def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recent=None):
+def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recent=None,
+                   codes=PATTERN_CODES, same_side=REQUIRE_SAME_SIDE):
     """Pattern MTF d'une paire.
 
     cells : {tf: (code, sens)} (le résultat du scan) ; tfs : timeframes affichés ;
@@ -69,6 +77,8 @@ def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recen
       buy, sell, active, total   décomptes
       live     nombre de signaux sur la dernière bougie (active - live = signaux récents grisés)
       aligned  True si tous les signaux actifs vont dans le même sens
+      match    True si le pattern fait partie de `codes` (toujours True si codes est None)
+      code     le pattern en majuscules (ex. 'REM') s'il correspond, sinon None
     """
     sel = select_tfs(tfs, preferred, n)
     if not sel:
@@ -95,8 +105,12 @@ def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recen
     letters = "".join(
         (i["letter"].lower() if i["state"] == "recent" else i["letter"]) if i["letter"]
         else ("?" if i["state"] == "absent" else "-") for i in items)
+    aligned = nb + ns > 0 and (nb == 0 or ns == 0)
+    pattern = letters.upper()
+    match = codes is None or (pattern in codes and (aligned or not same_side))
     return {"tfs": sel, "items": items, "letters": letters, "side": side, "buy": nb, "sell": ns,
-            "active": nb + ns, "live": sum(i["state"] == "signal" for i in items), "total": len(items), "aligned": nb + ns > 0 and (nb == 0 or ns == 0)}
+            "active": nb + ns, "live": sum(i["state"] == "signal" for i in items), "total": len(items),
+            "aligned": aligned, "match": match, "code": pattern if match and codes else None}
 
 
 # --- Rendu HTML -------------------------------------------------------------------------------
@@ -105,7 +119,15 @@ def tooltip(p):
     """Infobulle : une ligne par timeframe, puis la lecture d'ensemble."""
     if p is None:
         return "Pattern MTF : aucun timeframe disponible"
-    lines = [f"Pattern MTF ({' → '.join(p['tfs'])}) : {p['letters']}"]
+    order = ' → '.join(p['tfs'])
+    if p["match"] and p["code"]:
+        lines = [f"Pattern {p['code']} ({order})"]
+    elif p["match"]:
+        lines = [f"Pattern MTF ({order}) : {p['letters']}"]
+    else:
+        lines = [f"Aucun pattern {' / '.join(PATTERN_CODES)}", f"Lecture actuelle ({order}) : {p['letters']}"]
+        if p["letters"].upper() in PATTERN_CODES and not p["aligned"]:
+            lines.append("Pattern écarté : sens différents d'un TF à l'autre")
     for i in p["items"]:
         if i["state"] == "signal":
             lines.append(f"{i['tf']} : {CODE_NAMES[i['letter']]} · {SIDE_TEXT[i['sens']]} {ARROW[i['sens']]}")
@@ -136,7 +158,7 @@ def _chip(i) -> str:
 def pattern_cell(p) -> str:
     """Cellule « Pattern MTF » : une pastille lettre + timeframe par TF, puis la ligne de lecture."""
     tip = tooltip(p)
-    if p is None:
+    if p is None or not p["match"]:                # hors patterns autorisés : cellule vide
         return f'<td class="pat none" title="{tip}">–</td>'
     if p["active"] == 0:                           # aucun signal : pastilles grises, sans ligne de lecture
         chips = "".join(
@@ -144,9 +166,10 @@ def pattern_cell(p) -> str:
             for i in p["items"])
         return f'<td class="pat none" title="{tip}"><span class="pt">{chips}</span></td>'
     chips = "".join(_chip(i) for i in p["items"])
-    if p["side"] in ("B", "S"):
-        count = max(p["buy"], p["sell"])
-        read = f'{ARROW[p["side"]]} {count}/{p["total"]}' + ("" if p["aligned"] else " ⇅")
+    if p["code"] and p["side"] in ("B", "S"):
+        read = f'{ARROW[p["side"]]} {p["code"]}' + ("" if p["aligned"] else " ⇅")
+    elif p["side"] in ("B", "S"):
+        read = f'{ARROW[p["side"]]} {max(p["buy"], p["sell"])}/{p["total"]}' + ("" if p["aligned"] else " ⇅")
     else:
         read = "⇅ égalité"
     side_cls = p["side"] if p["side"] in ("B", "S") else "X"
@@ -172,7 +195,8 @@ table.bb td.pat .pa.S{color:#ef5350}
 table.bb td.pat.B.full{box-shadow:inset 0 0 0 1px #26a69a}
 table.bb td.pat.S.full{box-shadow:inset 0 0 0 1px #ef5350}
 table.bb td.pat.mix .pa{color:#BA7517}
-table.bb td.pat.none{color:#5c6070}
+table.bb td.pat.none{color:#5c6070;font-weight:400}
+table.bb td.pat .pa{letter-spacing:.04em}
 """
 PATTERN_CSS = "<style>" + _PATTERN_CSS_RULES + "</style>"   # usage autonome
 
@@ -214,17 +238,19 @@ def with_css(base_css, fit=False) -> str:
 
 def legend_section() -> str:
     """Section de légende « Pattern MTF » (à insérer dans legend_html de app.py)."""
-    letters = "".join(f"<div><b>{k}</b> · {v}</div>" for k, v in CODE_NAMES.items())
-    tfs = "auto (3 TF cochés les plus hauts)" if not PATTERN_TFS else ", ".join(PATTERN_TFS)
+    letters = "".join(f"<div><b>{k}</b> · {v}</div>" for k, v in CODE_NAMES.items()
+                      if not PATTERN_CODES or k in "".join(PATTERN_CODES))
+    tfs = "les 3 TF cochés les plus hauts" if not PATTERN_TFS else " → ".join(PATTERN_TFS)
+    pats = " · ".join(PATTERN_CODES) if PATTERN_CODES else "tous"
     return (
         '<h4>Pattern MTF</h4>'
-        '<div class="chips"><span class="chip buy">C ▲</span><span class="chip sell">M ▼</span>'
-        '<span class="chip low">– aucun signal</span></div>'
+        '<div class="chips"><span class="chip buy">▲ REM</span><span class="chip sell">▼ REE</span>'
+        '<span class="chip low">– aucun pattern ou sens mixtes</span></div>'
         '<div class="sigs">' + letters + '</div>'
-        f'<div class="note">Une lettre par timeframe ({html.escape(tfs)}), du plus haut au plus bas, '
-        'colorée selon le sens. « ▲ 2/3 » : 2 timeframes sur 3 vont dans le sens majoritaire ; « ⇅ » : '
-        'timeframes contradictoires ; cadre coloré : les 3 vont dans le même sens sur la dernière bougie. '
-        'Si « Afficher les signaux récents » est coché, un TF sans signal reprend son dernier signal, en grisé avec '
-        'son âge (« D1 −2 ») ; il compte dans le sens majoritaire. Information seulement : '
-        'n’entre ni dans l’entrée BBMA, ni dans la confiance, ni dans la qualité, ni dans le tri.</div>'
+        f'<div class="note">Seuls les patterns <b>{html.escape(pats)}</b> sont affichés, lus dans l’ordre des timeframes '
+        f'({html.escape(tfs)}) : la 1re lettre est le TF le plus haut. Chaque lettre est colorée selon son sens ; '
+        'les 3 lettres doivent aller dans le même sens (achat ou vente), sinon rien n’est affiché ; cadre coloré : les 3 '
+        'sont sur la dernière bougie. Si « Afficher les signaux récents » est coché, un TF sans signal reprend son dernier '
+        'signal, grisé avec son âge. Information seulement : n’entre ni dans l’entrée BBMA, ni dans la confiance, '
+        'ni dans la qualité, ni dans le tri.</div>'
     )

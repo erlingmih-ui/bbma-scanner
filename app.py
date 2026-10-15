@@ -478,7 +478,7 @@ def main():
 
     pairs, tfs, use_filter, auto, show_recent = sidebar_settings()
     show_pattern = st.sidebar.checkbox("Colonne Pattern MTF", True,
-                                       help="Signaux des 3 timeframes supérieurs (D1, H4, H1) en lettres R / E / M / C / O.")
+                                       help="Affiche le pattern REM, RRE ou REE formé par D1, H4 et H1 (R = Reentry, E = Extreme, M = MHV). Vide sinon.")
     fit_screen = st.sidebar.checkbox("Ajuster le tableau à l’écran", True,
                                      help="Réduit les marges et la taille du texte pour que tout le tableau tienne sans défilement.")
     if not pairs or not tfs:
