@@ -66,7 +66,7 @@ LEGEND_CSS = """
 """
 
 
-def legend_html(show_recent=False) -> str:
+def legend_html(show_recent=False, pat_mode=bpat.DEFAULT_MODE) -> str:
     """Légende organisée par sections, avec les mêmes couleurs que le tableau."""
     recent_note = ('<div class="note">Texte grisé « CODE ▲ −n » : la dernière bougie n’a pas de signal ; c’est le dernier signal, '
                    'n bougies plus tôt. Dans « Entrée BBMA », le même texte grisé donne la dernière entrée possible '
@@ -118,7 +118,7 @@ def legend_html(show_recent=False) -> str:
         '<div class="grad"></div>'
         '<div class="scale"><span>−100 vente forte</span><span>0</span><span>+100 achat fort</span></div>'
         '<div class="note">Force générale de la paire (calcul local à partir des indicateurs, M15 à W1). Rouge à gauche : vente ; vert à droite : achat ; « S % / B % » : part des indicateurs vendeurs / acheteurs. Indépendante de BBMA.</div>'
-        + bpat.legend_section() +
+        + bpat.legend_section(pat_mode) +
         '<h4>Qualité de l’entrée</h4>'
         f'<div class="chips"><span class="chip qa">A ≥ {GRADE_MIN["A"]}</span>'
         f'<span class="chip qb">B {GRADE_MIN["B"]} – {GRADE_MIN["A"] - 1}</span>'
@@ -371,7 +371,7 @@ def gauge_cell(g) -> str:
 
 
 def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None,
-                patterns=True) -> str:
+                patterns=True, pat_mode=bpat.DEFAULT_MODE) -> str:
     """Tableau : Pair, timeframes, Pattern MTF (facultatif), Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
     Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
     nuc = nuc or {}
@@ -397,7 +397,8 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         n = nuc.get(p)
         ghost = recent_entry(cells, tfs, feats, p, use_filter, d1) if show_recent and not tf_e else None
         pat_recent = {t: (feats.get((p, t)) or {}).get("recent") for t in tfs} if show_recent else None
-        pat_td = [bpat.pattern_cell(bpat.detect_pattern(cells, tfs, avail, recent=pat_recent))] if patterns else []
+        pat_td = [bpat.pattern_cell(bpat.detect_pattern(
+            cells, tfs, avail, preferred=bpat.MODES.get(pat_mode, bpat.PATTERN_TFS), recent=pat_recent))] if patterns else []
         tds = tf_tds + pat_td + [synth_cell(tf_e, code_e, sens_e, kind, ghost), conf_cell(score),
                         gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail)]
         fr_status, fr_tip = bf.pair_status(p, feats, tfs)
@@ -478,7 +479,16 @@ def main():
 
     pairs, tfs, use_filter, auto, show_recent = sidebar_settings()
     show_pattern = st.sidebar.checkbox("Colonne Pattern MTF", True,
-                                       help="Affiche le pattern REM, RRE ou REE formé par D1, H4 et H1 (R = Reentry, E = Extreme, M = MHV). Vide sinon.")
+                                       help="Affiche le pattern REM, RRE ou REE (R = Reentry, E = Extreme, M = MHV), complet ou incomplet, formé par les 3 timeframes du mode choisi. Vide sinon.")
+    pat_mode = bpat.DEFAULT_MODE
+    if show_pattern:
+        pat_mode = st.sidebar.radio("Mode Pattern MTF", list(bpat.MODES), horizontal=True,
+                                    format_func=lambda m: f"{m} ({' · '.join(bpat.MODES[m])})",
+                                    help="Swing : D1 → H4 → H1. Intraday : H1 → M15 → M5, plus de signaux mais plus de bruit ; "
+                                         "les données yfinance ont ~15 min de retard, ce qui pèse sur M5.")
+        absent = [t for t in bpat.MODES[pat_mode] if t not in tfs]
+        if absent:
+            st.sidebar.caption(f"Cochez aussi {', '.join(absent)} dans « Timeframes » pour lire ce mode en entier.")
     fit_screen = st.sidebar.checkbox("Ajuster le tableau à l’écran", True,
                                      help="Réduit les marges et la taille du texte pour que tout le tableau tienne sans défilement.")
     if not pairs or not tfs:
@@ -500,13 +510,13 @@ def main():
 
         table_css = bpat.with_css(CSS, fit_screen)   # un seul bloc <style> (CommonMark)
         st.markdown(table_css + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength,
-                                            patterns=show_pattern),
+                                            patterns=show_pattern, pat_mode=pat_mode),
                     unsafe_allow_html=True)
         legend_open = st.session_state.get("show_legend", False)
         st.button("Masquer la légende" if legend_open else "Afficher la légende",
                   key="btn_legend", on_click=_toggle_legend)
         if legend_open:
-            st.markdown(legend_html(show_recent), unsafe_allow_html=True)
+            st.markdown(legend_html(show_recent, pat_mode), unsafe_allow_html=True)
         guide_open = st.session_state.get("show_guide", False)
         st.button("Masquer le guide de décision" if guide_open else "Afficher le guide de décision",
                   key="btn_guide", on_click=_toggle_guide)

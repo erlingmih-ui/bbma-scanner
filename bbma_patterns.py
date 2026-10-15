@@ -17,6 +17,9 @@ le pattern si une lettre est mal placée). Sur les chips : lettre encadrée = bi
 Un pattern complet garde son affichage d'origine (« ▲ REM ») et son cadre coloré.
 REQUIRE_SAME_SIDE = True : le pattern doit en plus aller dans le même sens (achat ou vente) sur les 3 TF.
 
+Modes : MODES = Swing (D1 → H4 → H1) ou Intraday (H1 → M15 → M5). app.py choisit le mode (barre latérale) et le passe
+à detect_pattern(preferred=MODES[mode]) ; le mode Swing reste le défaut. Même logique, mêmes patterns, autres timeframes.
+
 Choix des 3 timeframes (PATTERN_TFS) :
   - par défaut D1, H4, H1, à condition qu'ils soient cochés dans la barre latérale ;
   - s'il en manque, on complète avec les autres timeframes cochés (du plus haut au plus bas) ;
@@ -42,6 +45,9 @@ PATTERN_TFS = ("D1", "H4", "H1")       # None : les N timeframes cochés les plu
 N_TFS = 3
 PATTERN_CODES = ("REM", "RRE", "REE")   # R = Reentry, E = Extreme, M = MHV ; None : aucun filtre
 REQUIRE_SAME_SIDE = True                # les 3 lettres doivent aller dans le même sens (achat ou vente)
+# Modes de lecture (sélecteur « Mode Pattern MTF » de app.py) : les 3 timeframes lus, du plus haut au plus bas.
+MODES = {"Swing": ("D1", "H4", "H1"), "Intraday": ("H1", "M15", "M5")}
+DEFAULT_MODE = "Swing"
 ALLOW_PARTIAL = True                    # False : seuls les patterns complets sont affichés (comportement d'origine)
 MIN_HITS = 1                            # signaux bien placés minimum pour afficher un pattern incomplet (1 à 3)
 PARTIAL_STRICT = False                  # True : un signal mal placé (ex. « O » en 2e position) écarte le pattern incomplet
@@ -289,11 +295,12 @@ def with_css(base_css, fit=False) -> str:
     return base_css[:i] + extra + base_css[i:]
 
 
-def legend_section() -> str:
-    """Section de légende « Pattern MTF » (à insérer dans legend_html de app.py)."""
+def legend_section(mode=DEFAULT_MODE) -> str:
+    """Section de légende « Pattern MTF » (à insérer dans legend_html de app.py). mode : clé de MODES."""
     letters = "".join(f"<div><b>{k}</b> · {v}</div>" for k, v in CODE_NAMES.items()
                       if not PATTERN_CODES or k in "".join(PATTERN_CODES))
-    tfs = "les 3 TF cochés les plus hauts" if not PATTERN_TFS else " → ".join(PATTERN_TFS)
+    pref = MODES.get(mode, PATTERN_TFS)
+    tfs = "les 3 TF cochés les plus hauts" if not pref else " → ".join(pref)
     pats = " · ".join(PATTERN_CODES) if PATTERN_CODES else "tous"
     return (
         '<h4>Pattern MTF</h4>'
