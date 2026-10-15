@@ -8,6 +8,11 @@ Sous les pastilles, une ligne de lecture : sens majoritaire et nombre de TF acti
 Filtre : la colonne n'affiche QUE les patterns de PATTERN_CODES (par défaut REM, RRE, REE), lus dans l'ordre
 des timeframes (D1 → H4 → H1 : la 1re lettre est le TF le plus haut). Aucun autre pattern n'est affiché : la
 cellule reste vide (« – ») et l'infobulle donne la lecture actuelle. PATTERN_CODES = None : tous les patterns.
+Pattern INCOMPLET : il s'affiche dès qu'au moins un signal est à la bonne place, c'est-à-dire que la lettre
+d'un timeframe est celle du pattern cible à cette position (ex. D1 = R pour REM / RRE / REE ; H4 = E pour REM / REE ;
+H1 = M pour REM, H1 = E pour REE). Le pattern cible retenu est celui qui compte le plus de signaux bien placés ;
+la ligne de lecture le montre avec des points pour les places vides ou mal tenues (ex. « ▲ R·· », « ▼ ·E· »).
+Un pattern complet garde son affichage d'origine (« ▲ REM ») et son cadre coloré.
 REQUIRE_SAME_SIDE = True : le pattern doit en plus aller dans le même sens (achat ou vente) sur les 3 TF.
 
 Choix des 3 timeframes (PATTERN_TFS) :
@@ -62,6 +67,18 @@ def select_tfs(tfs, preferred=PATTERN_TFS, n=N_TFS):
     return [t for t in core.TF_ORDER if t in chosen][:n]
 
 
+def _best_fit(items, codes):
+    """(nombre de signaux bien placés, pattern cible, liste de booléens par TF) pour le meilleur pattern de `codes`.
+    Un signal est bien placé si sa lettre est celle du pattern cible à la même position."""
+    best = (0, None, None)
+    for code in codes or ():
+        hits = [bool(i["letter"]) and k < len(code) and i["letter"] == code[k] for k, i in enumerate(items)]
+        n = sum(hits)
+        if n > best[0]:
+            best = (n, code, hits)
+    return best
+
+
 def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recent=None,
                    codes=PATTERN_CODES, same_side=REQUIRE_SAME_SIDE):
     """Pattern MTF d'une paire.
@@ -77,8 +94,12 @@ def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recen
       buy, sell, active, total   décomptes
       live     nombre de signaux sur la dernière bougie (active - live = signaux récents grisés)
       aligned  True si tous les signaux actifs vont dans le même sens
-      match    True si le pattern fait partie de `codes` (toujours True si codes est None)
-      code     le pattern en majuscules (ex. 'REM') s'il correspond, sinon None
+      match    True si le pattern fait partie de `codes`, complet ou incomplet (toujours True si codes est None)
+      code     le pattern COMPLET en majuscules (ex. 'REM') s'il correspond, sinon None
+      partial  True si le pattern est incomplet : au moins un signal bien placé, mais pas le pattern entier
+      hits     nombre de signaux bien placés (pattern incomplet)
+      target   pattern cible d'un pattern incomplet (ex. 'REM'), sinon None
+      shape    lecture d'un pattern incomplet, '·' pour une place vide ou mal tenue (ex. 'R··')
     """
     sel = select_tfs(tfs, preferred, n)
     if not sel:
@@ -107,10 +128,19 @@ def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recen
         else ("?" if i["state"] == "absent" else "-") for i in items)
     aligned = nb + ns > 0 and (nb == 0 or ns == 0)
     pattern = letters.upper()
-    match = codes is None or (pattern in codes and (aligned or not same_side))
+    full = codes is None or pattern in codes
+    hits_n, target, hits = (0, None, None) if codes is None else _best_fit(items, codes)
+    if hits:
+        for i, h in zip(items, hits):
+            i["fit"] = h
+    partial = (not full) and hits_n >= 1
+    match = (full or partial) and (aligned or not same_side)
+    shape = "".join(target[k] if hits[k] else "·" for k in range(len(items))) if partial else None
     return {"tfs": sel, "items": items, "letters": letters, "side": side, "buy": nb, "sell": ns,
             "active": nb + ns, "live": sum(i["state"] == "signal" for i in items), "total": len(items),
-            "aligned": aligned, "match": match, "code": pattern if match and codes else None}
+            "aligned": aligned, "match": match, "code": pattern if match and full and codes else None,
+            "partial": bool(match and partial), "hits": hits_n if partial else 0,
+            "target": target if partial else None, "shape": shape}
 
 
 # --- Rendu HTML -------------------------------------------------------------------------------
@@ -122,6 +152,9 @@ def tooltip(p):
     order = ' → '.join(p['tfs'])
     if p["match"] and p["code"]:
         lines = [f"Pattern {p['code']} ({order})"]
+    elif p["match"] and p.get("partial"):
+        lines = [f"Pattern incomplet {p['target']} ({order}) : {p['letters']}",
+                 f"Signaux bien placés : {p['hits']}/{p['total']}"]
     elif p["match"]:
         lines = [f"Pattern MTF ({order}) : {p['letters']}"]
     else:
@@ -129,11 +162,12 @@ def tooltip(p):
         if p["letters"].upper() in PATTERN_CODES and not p["aligned"]:
             lines.append("Pattern écarté : sens différents d'un TF à l'autre")
     for i in p["items"]:
+        ok = " ✓ bien placé" if p.get("partial") and i.get("fit") else ""
         if i["state"] == "signal":
-            lines.append(f"{i['tf']} : {CODE_NAMES[i['letter']]} · {SIDE_TEXT[i['sens']]} {ARROW[i['sens']]}")
+            lines.append(f"{i['tf']} : {CODE_NAMES[i['letter']]} · {SIDE_TEXT[i['sens']]} {ARROW[i['sens']]}{ok}")
         elif i["state"] == "recent":
             lines.append(f"{i['tf']} : {CODE_NAMES[i['letter']]} · {SIDE_TEXT[i['sens']]} {ARROW[i['sens']]}"
-                         f" · récent, il y a {i['age']} bougie(s) (grisé)")
+                         f" · récent, il y a {i['age']} bougie(s) (grisé){ok}")
         elif i["state"] == "absent":
             lines.append(f"{i['tf']} : données absentes")
         else:
@@ -168,12 +202,14 @@ def pattern_cell(p) -> str:
     chips = "".join(_chip(i) for i in p["items"])
     if p["code"] and p["side"] in ("B", "S"):
         read = f'{ARROW[p["side"]]} {p["code"]}' + ("" if p["aligned"] else " ⇅")
+    elif p.get("partial") and p["side"] in ("B", "S"):
+        read = f'{ARROW[p["side"]]} {html.escape(p["shape"])}' + ("" if p["aligned"] else " ⇅")
     elif p["side"] in ("B", "S"):
         read = f'{ARROW[p["side"]]} {max(p["buy"], p["sell"])}/{p["total"]}' + ("" if p["aligned"] else " ⇅")
     else:
         read = "⇅ égalité"
     side_cls = p["side"] if p["side"] in ("B", "S") else "X"
-    full = " full" if p["aligned"] and p["live"] == p["total"] else ""
+    full = " full" if p["aligned"] and p["live"] == p["total"] and not p.get("partial") else ""
     mix = "" if p["aligned"] else " mix"
     return (f'<td class="pat {side_cls}{full}{mix}" title="{tip}"><span class="pt">{chips}</span>'
             f'<div class="pa {side_cls}">{read}</div></td>')
@@ -245,12 +281,14 @@ def legend_section() -> str:
     return (
         '<h4>Pattern MTF</h4>'
         '<div class="chips"><span class="chip buy">▲ REM</span><span class="chip sell">▼ REE</span>'
+        '<span class="chip buy">▲ R··</span>'
         '<span class="chip low">– aucun pattern ou sens mixtes</span></div>'
         '<div class="sigs">' + letters + '</div>'
         f'<div class="note">Seuls les patterns <b>{html.escape(pats)}</b> sont affichés, lus dans l’ordre des timeframes '
         f'({html.escape(tfs)}) : la 1re lettre est le TF le plus haut. Chaque lettre est colorée selon son sens ; '
         'les 3 lettres doivent aller dans le même sens (achat ou vente), sinon rien n’est affiché ; cadre coloré : les 3 '
-        'sont sur la dernière bougie. Si « Afficher les signaux récents » est coché, un TF sans signal reprend son dernier '
+        'sont sur la dernière bougie. Un pattern incomplet (ex. « R·· ») s’affiche dès qu’un signal est à la bonne place ; '
+        'les points marquent les places vides ou mal tenues. Si « Afficher les signaux récents » est coché, un TF sans signal reprend son dernier '
         'signal, grisé avec son âge. Information seulement : n’entre ni dans l’entrée BBMA, ni dans la confiance, '
         'ni dans la qualité, ni dans le tri.</div>'
     )
