@@ -158,8 +158,7 @@ def pattern_cell(p) -> str:
 
 # --- CSS --------------------------------------------------------------------------------------
 
-PATTERN_CSS = """<style>
-table.bb td.pat{min-width:92px;padding:6px 6px;background:#2a2e39}
+_PATTERN_CSS_RULES = """table.bb td.pat{min-width:92px;padding:6px 6px;background:#2a2e39}
 table.bb td.pat .pt{display:inline-flex;gap:3px;vertical-align:middle}
 table.bb td.pat .pc{display:flex;flex-direction:column;align-items:center;min-width:24px;padding:3px 3px 2px;border-radius:5px;background:#1e222d;color:#5c6070}
 table.bb td.pat .pc b{font-size:14px;line-height:1.1}
@@ -174,13 +173,13 @@ table.bb td.pat.B.full{box-shadow:inset 0 0 0 1px #26a69a}
 table.bb td.pat.S.full{box-shadow:inset 0 0 0 1px #ef5350}
 table.bb td.pat.mix .pa{color:#BA7517}
 table.bb td.pat.none{color:#5c6070}
-</style>"""
+"""
+PATTERN_CSS = "<style>" + _PATTERN_CSS_RULES + "</style>"   # usage autonome
 
 # Ajuste le tableau à la largeur de l'écran : plus de largeur minimale fixe, marges réduites, police et
 # espacements proportionnels à la fenêtre (clamp). Sur écran très étroit, le défilement horizontal reste
 # actif (règle d'origine de app.py) avec la colonne Pair figée.
-FIT_CSS = """<style>
-.block-container{padding-left:1rem!important;padding-right:1rem!important;max-width:100%!important}
+_FIT_CSS_RULES = """.block-container{padding-left:1rem!important;padding-right:1rem!important;max-width:100%!important}
 .bb-wrap{padding:3px}
 table.bb{min-width:0;border-spacing:2px;font-size:clamp(10px,.8vw,13px)}
 table.bb th{padding:6px 2px;font-size:clamp(8px,.62vw,11px);letter-spacing:.02em}
@@ -199,7 +198,18 @@ table.bb td.pat{min-width:0;padding:5px 3px}
 table.bb td.pat .pc{min-width:clamp(18px,1.5vw,24px)}
 table.bb td.pat .pc b{font-size:clamp(11px,.9vw,14px)}
 .fdot{width:6px;height:6px;margin-left:4px}
-</style>"""
+"""
+FIT_CSS = "<style>" + _FIT_CSS_RULES + "</style>"   # usage autonome
+
+
+def with_css(base_css, fit=False) -> str:
+    """Insère les règles de la colonne (et, si fit, l'ajustement à l'écran) DANS le bloc <style> de base_css.
+
+    Un seul bloc <style> est indispensable : st.markdown suit CommonMark, et deux blocs <style> collés
+    (« </style><style> ») font lire le CSS suivant comme du texte Markdown, ce qui casse l'affichage du tableau."""
+    extra = _PATTERN_CSS_RULES + (_FIT_CSS_RULES if fit else "")
+    i = base_css.rindex("</style>")
+    return base_css[:i] + extra + base_css[i:]
 
 
 def legend_section() -> str:

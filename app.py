@@ -498,7 +498,7 @@ def main():
                 "Clique sur Rafraîchir dans quelques instants."
             )
 
-        table_css = CSS + bpat.PATTERN_CSS + (bpat.FIT_CSS if fit_screen else "")
+        table_css = bpat.with_css(CSS, fit_screen)   # un seul bloc <style> (CommonMark)
         st.markdown(table_css + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength,
                                             patterns=show_pattern),
                     unsafe_allow_html=True)
