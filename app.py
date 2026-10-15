@@ -18,6 +18,7 @@ import bbma_session as bs
 import bbma_gauge as bg
 import bbma_techgauge as bst   # jauge locale gratuite (remplace bbma_strength / TradingView)
 import bbma_nuclear as bn
+import bbma_patterns as bpat   # colonne « Pattern MTF » (lettres R / E / M / C / O)
 import bbma_pairs as bp
 import bbma_quality as bq
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
@@ -117,6 +118,7 @@ def legend_html(show_recent=False) -> str:
         '<div class="grad"></div>'
         '<div class="scale"><span>−100 vente forte</span><span>0</span><span>+100 achat fort</span></div>'
         '<div class="note">Force générale de la paire (calcul local à partir des indicateurs, M15 à W1). Rouge à gauche : vente ; vert à droite : achat ; « S % / B % » : part des indicateurs vendeurs / acheteurs. Indépendante de BBMA.</div>'
+        + bpat.legend_section() +
         '<h4>Qualité de l’entrée</h4>'
         f'<div class="chips"><span class="chip qa">A ≥ {GRADE_MIN["A"]}</span>'
         f'<span class="chip qb">B {GRADE_MIN["B"]} – {GRADE_MIN["A"] - 1}</span>'
@@ -368,8 +370,9 @@ def gauge_cell(g) -> str:
             f'<span class="gb{b_dom}">B {buy_pct}%</span></div></td>')
 
 
-def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None) -> str:
-    """Tableau : Pair, timeframes, Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
+def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None,
+                patterns=True) -> str:
+    """Tableau : Pair, timeframes, Pattern MTF (facultatif), Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
     Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
     nuc = nuc or {}
     strength = strength or {}
@@ -393,7 +396,9 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         q_score, q_grade = bs.cap_grade(q_score, q_grade, kind)
         n = nuc.get(p)
         ghost = recent_entry(cells, tfs, feats, p, use_filter, d1) if show_recent and not tf_e else None
-        tds = tf_tds + [synth_cell(tf_e, code_e, sens_e, kind, ghost), conf_cell(score),
+        pat_recent = {t: (feats.get((p, t)) or {}).get("recent") for t in tfs} if show_recent else None
+        pat_td = [bpat.pattern_cell(bpat.detect_pattern(cells, tfs, avail, recent=pat_recent))] if patterns else []
+        tds = tf_tds + pat_td + [synth_cell(tf_e, code_e, sens_e, kind, ghost), conf_cell(score),
                         gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail)]
         fr_status, fr_tip = bf.pair_status(p, feats, tfs)
         row = f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>'
@@ -405,6 +410,7 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
 
     head = ('<tr><th class="pair">Pair</th>'
             + "".join(f"<th>{t}</th>" for t in tfs)
+            + ('<th class="s5 hmtf">Pattern MTF</th>' if patterns else '')
             + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th>'
             + '<th class="s4 hmtf">Jauge</th><th class="s4 hmtf">Nuclear</th><th class="s3 hmtf">Qualité</th></tr>')
     return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
@@ -471,6 +477,10 @@ def main():
     st.title(APP_TITLE)
 
     pairs, tfs, use_filter, auto, show_recent = sidebar_settings()
+    show_pattern = st.sidebar.checkbox("Colonne Pattern MTF", True,
+                                       help="Signaux des 3 timeframes supérieurs (D1, H4, H1) en lettres R / E / M / C / O.")
+    fit_screen = st.sidebar.checkbox("Ajuster le tableau à l’écran", True,
+                                     help="Réduit les marges et la taille du texte pour que tout le tableau tienne sans défilement.")
     if not pairs or not tfs:
         st.info("Choisis au moins une paire et un timeframe dans la barre latérale.")
         st.stop()
@@ -488,7 +498,9 @@ def main():
                 "Clique sur Rafraîchir dans quelques instants."
             )
 
-        st.markdown(CSS + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength),
+        table_css = CSS + bpat.PATTERN_CSS + (bpat.FIT_CSS if fit_screen else "")
+        st.markdown(table_css + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength,
+                                            patterns=show_pattern),
                     unsafe_allow_html=True)
         legend_open = st.session_state.get("show_legend", False)
         st.button("Masquer la légende" if legend_open else "Afficher la légende",

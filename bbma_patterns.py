@@ -1,0 +1,220 @@
+"""Colonne « Pattern MTF » : les signaux des 3 timeframes supérieurs actifs, traduits en lettres Oma Ally.
+
+Lettres :  R = Reentry (RE) · E = Extreme (EXM ou EXT) · M = MHV · C = CSAK · O = Momentum (MOM)
+Chaque timeframe affiche sa lettre, colorée selon le sens (vert = achat, rouge = vente), son nom en dessous.
+Sous les pastilles, une ligne de lecture : sens majoritaire et nombre de TF actifs (ex. « ▲ 3/3 »).
+« ⇅ » signale que les TF ne vont pas tous dans le même sens.
+
+Choix des 3 timeframes (PATTERN_TFS) :
+  - par défaut D1, H4, H1, à condition qu'ils soient cochés dans la barre latérale ;
+  - s'il en manque, on complète avec les autres timeframes cochés (du plus haut au plus bas) ;
+  - PATTERN_TFS = None : on prend simplement les 3 timeframes cochés les plus hauts (ex. MN, W1, D1).
+
+Signaux récents : si `recent` est fourni (case « Afficher les signaux récents »), un TF sans signal sur la
+dernière bougie reprend son dernier signal récent (core.recent_signal, jusqu'à RECENT_BARS bougies). Il est
+affiché en grisé avec son âge (« −2 ») et sa lettre en minuscule dans `letters` (ex. « CeR »). Il compte dans le
+sens majoritaire, mais le cadre « tous alignés » n'est donné que si tous les signaux sont sur la dernière bougie.
+
+Module ajouté, sans Streamlit et sans téléchargement : il relit les signaux déjà calculés par le scan
+(`res` de bbma_core / bbma_nuclear). bbma_core, bbma_quality, bbma_nuclear et les autres modules ne sont
+pas modifiés. Ce module n'agit ni sur la synthèse, ni sur la confiance, ni sur la qualité, ni sur le tri.
+
+Intégration dans app.py : voir build_table (colonne), main (CSS) et legend_html (légende).
+"""
+import html
+
+import bbma_core as core
+
+# --- Paramètres -------------------------------------------------------------------------------
+PATTERN_TFS = ("D1", "H4", "H1")       # None : les N timeframes cochés les plus hauts
+N_TFS = 3
+
+LETTER = {"RE": "R", "EXM": "E", "EXT": "E", "MHV": "M", "CSAK": "C", "MOM": "O"}
+CODE_NAMES = {
+    "R": "Reentry (RE)",
+    "E": "Extreme (EXM / EXT)",
+    "M": "Market Hilang Volume (MHV)",
+    "C": "Candle Arah Kukuh (CSAK)",
+    "O": "Momentum (MOM)",
+}
+ARROW = {"B": "▲", "S": "▼"}
+SIDE_TEXT = {"B": "achat", "S": "vente"}
+
+
+# --- Détection (fonctions pures) --------------------------------------------------------------
+
+def select_tfs(tfs, preferred=PATTERN_TFS, n=N_TFS):
+    """Les timeframes analysés, du plus haut au plus bas, parmi les timeframes affichés (tfs)."""
+    shown = [t for t in core.TF_ORDER if t in set(tfs)]
+    if preferred:
+        chosen = [t for t in core.TF_ORDER if t in preferred and t in shown]
+        # Complément : d'autres TF cochés, du plus haut au plus bas, jusqu'à n.
+        chosen += [t for t in shown if t not in chosen][: max(0, n - len(chosen))]
+    else:
+        chosen = shown[:n]
+    return [t for t in core.TF_ORDER if t in chosen][:n]
+
+
+def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recent=None):
+    """Pattern MTF d'une paire.
+
+    cells : {tf: (code, sens)} (le résultat du scan) ; tfs : timeframes affichés ;
+    avail : timeframes ayant des données (None = tous) ; recent : {tf: (code, sens, age) ou None}, derniers signaux
+    des bougies précédentes (None = signaux récents ignorés). Retourne None si aucun timeframe n'est utilisable,
+    sinon un dict :
+      tfs      timeframes analysés (du plus haut au plus bas)
+      items    liste de {tf, state ('signal' | 'recent' | 'none' | 'absent'), code, letter, sens, age}
+      letters  lettres concaténées, minuscule = signal récent, '-' = aucun, '?' = pas de données (ex. 'Cr-')
+      side     'B' / 'S' (sens majoritaire), 'X' (égalité) ou None (aucun signal)
+      buy, sell, active, total   décomptes
+      live     nombre de signaux sur la dernière bougie (active - live = signaux récents grisés)
+      aligned  True si tous les signaux actifs vont dans le même sens
+    """
+    sel = select_tfs(tfs, preferred, n)
+    if not sel:
+        return None
+    have = None if avail is None else set(avail)
+    items = []
+    for t in sel:
+        if have is not None and t not in have:
+            items.append({"tf": t, "state": "absent", "code": None, "letter": None, "sens": None, "age": 0})
+            continue
+        code, sens = (cells or {}).get(t, (None, None))
+        letter = LETTER.get(code) if sens in ("B", "S") else None
+        rec = (recent or {}).get(t)
+        if letter:
+            items.append({"tf": t, "state": "signal", "code": code, "letter": letter, "sens": sens, "age": 0})
+        elif rec and LETTER.get(rec[0]) and rec[1] in ("B", "S"):
+            items.append({"tf": t, "state": "recent", "code": rec[0], "letter": LETTER[rec[0]], "sens": rec[1],
+                          "age": int(rec[2])})
+        else:
+            items.append({"tf": t, "state": "none", "code": None, "letter": None, "sens": None, "age": 0})
+    nb = sum(i["sens"] == "B" for i in items)
+    ns = sum(i["sens"] == "S" for i in items)
+    side = None if nb + ns == 0 else ("B" if nb > ns else "S" if ns > nb else "X")
+    letters = "".join(
+        (i["letter"].lower() if i["state"] == "recent" else i["letter"]) if i["letter"]
+        else ("?" if i["state"] == "absent" else "-") for i in items)
+    return {"tfs": sel, "items": items, "letters": letters, "side": side, "buy": nb, "sell": ns,
+            "active": nb + ns, "live": sum(i["state"] == "signal" for i in items), "total": len(items), "aligned": nb + ns > 0 and (nb == 0 or ns == 0)}
+
+
+# --- Rendu HTML -------------------------------------------------------------------------------
+
+def tooltip(p):
+    """Infobulle : une ligne par timeframe, puis la lecture d'ensemble."""
+    if p is None:
+        return "Pattern MTF : aucun timeframe disponible"
+    lines = [f"Pattern MTF ({' → '.join(p['tfs'])}) : {p['letters']}"]
+    for i in p["items"]:
+        if i["state"] == "signal":
+            lines.append(f"{i['tf']} : {CODE_NAMES[i['letter']]} · {SIDE_TEXT[i['sens']]} {ARROW[i['sens']]}")
+        elif i["state"] == "recent":
+            lines.append(f"{i['tf']} : {CODE_NAMES[i['letter']]} · {SIDE_TEXT[i['sens']]} {ARROW[i['sens']]}"
+                         f" · récent, il y a {i['age']} bougie(s) (grisé)")
+        elif i["state"] == "absent":
+            lines.append(f"{i['tf']} : données absentes")
+        else:
+            lines.append(f"{i['tf']} : aucun signal")
+    if p["side"] in ("B", "S"):
+        verdict = f"Sens majoritaire : {SIDE_TEXT[p['side']]} ({max(p['buy'], p['sell'])}/{p['total']})"
+        lines += ["", verdict + ("" if p["aligned"] else " · timeframes contradictoires")]
+    elif p["side"] == "X":
+        lines += ["", "Signaux opposés à égalité"]
+    return "&#10;".join(html.escape(x) for x in lines)
+
+
+def _chip(i) -> str:
+    """Pastille d'un TF : lettre et nom ; signal récent grisé avec son âge (« D1 −2 »)."""
+    tf = html.escape(i["tf"])
+    if i["state"] == "recent":
+        return f'<span class="pc {i["sens"]} g"><b>{i["letter"]}</b><i>{tf} −{i["age"]}</i></span>'
+    letter = i["letter"] or ("?" if i["state"] == "absent" else "–")
+    return f'<span class="pc {i["sens"] or ""}"><b>{letter}</b><i>{tf}</i></span>'
+
+
+def pattern_cell(p) -> str:
+    """Cellule « Pattern MTF » : une pastille lettre + timeframe par TF, puis la ligne de lecture."""
+    tip = tooltip(p)
+    if p is None:
+        return f'<td class="pat none" title="{tip}">–</td>'
+    if p["active"] == 0:                           # aucun signal : pastilles grises, sans ligne de lecture
+        chips = "".join(
+            f'<span class="pc"><b>{"?" if i["state"] == "absent" else "–"}</b><i>{html.escape(i["tf"])}</i></span>'
+            for i in p["items"])
+        return f'<td class="pat none" title="{tip}"><span class="pt">{chips}</span></td>'
+    chips = "".join(_chip(i) for i in p["items"])
+    if p["side"] in ("B", "S"):
+        count = max(p["buy"], p["sell"])
+        read = f'{ARROW[p["side"]]} {count}/{p["total"]}' + ("" if p["aligned"] else " ⇅")
+    else:
+        read = "⇅ égalité"
+    side_cls = p["side"] if p["side"] in ("B", "S") else "X"
+    full = " full" if p["aligned"] and p["live"] == p["total"] else ""
+    mix = "" if p["aligned"] else " mix"
+    return (f'<td class="pat {side_cls}{full}{mix}" title="{tip}"><span class="pt">{chips}</span>'
+            f'<div class="pa {side_cls}">{read}</div></td>')
+
+
+# --- CSS --------------------------------------------------------------------------------------
+
+PATTERN_CSS = """<style>
+table.bb td.pat{min-width:92px;padding:6px 6px;background:#2a2e39}
+table.bb td.pat .pt{display:inline-flex;gap:3px;vertical-align:middle}
+table.bb td.pat .pc{display:flex;flex-direction:column;align-items:center;min-width:24px;padding:3px 3px 2px;border-radius:5px;background:#1e222d;color:#5c6070}
+table.bb td.pat .pc b{font-size:14px;line-height:1.1}
+table.bb td.pat .pc i{font-style:normal;font-size:8px;font-weight:600;margin-top:1px;opacity:.85}
+table.bb td.pat .pc.B{background:rgba(38,166,154,.22);color:#26a69a}
+table.bb td.pat .pc.S{background:rgba(239,83,80,.22);color:#ef5350}
+table.bb td.pat .pc.g{opacity:.55;box-shadow:inset 0 0 0 1px currentColor;background:transparent}
+table.bb td.pat .pa{margin-top:4px;font-size:10px;font-weight:700;color:#787b86}
+table.bb td.pat .pa.B{color:#26a69a}
+table.bb td.pat .pa.S{color:#ef5350}
+table.bb td.pat.B.full{box-shadow:inset 0 0 0 1px #26a69a}
+table.bb td.pat.S.full{box-shadow:inset 0 0 0 1px #ef5350}
+table.bb td.pat.mix .pa{color:#BA7517}
+table.bb td.pat.none{color:#5c6070}
+</style>"""
+
+# Ajuste le tableau à la largeur de l'écran : plus de largeur minimale fixe, marges réduites, police et
+# espacements proportionnels à la fenêtre (clamp). Sur écran très étroit, le défilement horizontal reste
+# actif (règle d'origine de app.py) avec la colonne Pair figée.
+FIT_CSS = """<style>
+.block-container{padding-left:1rem!important;padding-right:1rem!important;max-width:100%!important}
+.bb-wrap{padding:3px}
+table.bb{min-width:0;border-spacing:2px;font-size:clamp(10px,.8vw,13px)}
+table.bb th{padding:6px 2px;font-size:clamp(8px,.62vw,11px);letter-spacing:.02em}
+table.bb th.pair{width:auto;min-width:74px;font-size:clamp(10px,.8vw,13px)}
+table.bb td{padding:5px 3px;border-radius:6px;font-size:clamp(10px,.8vw,13px)}
+table.bb td.strong{box-shadow:inset 2px 0 0 currentColor}
+table.bb .tpw{margin-left:3px;padding:0 3px;font-size:8px}
+table.bb .rsi{font-size:9px;margin-top:2px}
+table.bb td.synth,table.bb td.conf,table.bb td.qual{min-width:0}
+table.bb td.synth{font-size:clamp(10px,.75vw,12px)}
+table.bb td.gauge{min-width:0;max-width:none;padding:5px 4px}
+table.bb .gsplit{font-size:clamp(9px,.7vw,12px)}
+table.bb td.nuc{min-width:0;max-width:none;padding:5px 3px;font-size:clamp(9px,.72vw,12px)}
+table.bb td.nuc .ntf{font-size:clamp(9px,.68vw,11px)}
+table.bb td.pat{min-width:0;padding:5px 3px}
+table.bb td.pat .pc{min-width:clamp(18px,1.5vw,24px)}
+table.bb td.pat .pc b{font-size:clamp(11px,.9vw,14px)}
+.fdot{width:6px;height:6px;margin-left:4px}
+</style>"""
+
+
+def legend_section() -> str:
+    """Section de légende « Pattern MTF » (à insérer dans legend_html de app.py)."""
+    letters = "".join(f"<div><b>{k}</b> · {v}</div>" for k, v in CODE_NAMES.items())
+    tfs = "auto (3 TF cochés les plus hauts)" if not PATTERN_TFS else ", ".join(PATTERN_TFS)
+    return (
+        '<h4>Pattern MTF</h4>'
+        '<div class="chips"><span class="chip buy">C ▲</span><span class="chip sell">M ▼</span>'
+        '<span class="chip low">– aucun signal</span></div>'
+        '<div class="sigs">' + letters + '</div>'
+        f'<div class="note">Une lettre par timeframe ({html.escape(tfs)}), du plus haut au plus bas, '
+        'colorée selon le sens. « ▲ 2/3 » : 2 timeframes sur 3 vont dans le sens majoritaire ; « ⇅ » : '
+        'timeframes contradictoires ; cadre coloré : les 3 vont dans le même sens sur la dernière bougie. '
+        'Si « Afficher les signaux récents » est coché, un TF sans signal reprend son dernier signal, en grisé avec '
+        'son âge (« D1 −2 ») ; il compte dans le sens majoritaire. Information seulement : '
+        'n’entre ni dans l’entrée BBMA, ni dans la confiance, ni dans la qualité, ni dans le tri.</div>'
+    )
