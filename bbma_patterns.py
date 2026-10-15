@@ -25,8 +25,13 @@ Choix des 3 timeframes (PATTERN_TFS) :
   - s'il en manque, on complète avec les autres timeframes cochés (du plus haut au plus bas) ;
   - PATTERN_TFS = None : on prend simplement les 3 timeframes cochés les plus hauts (ex. MN, W1, D1).
 
-Signaux récents : si `recent` est fourni (case « Afficher les signaux récents »), un TF sans signal sur la
-dernière bougie reprend son dernier signal récent (core.recent_signal, jusqu'à RECENT_BARS bougies). Il est
+Signaux EN VIE : un signal reste affiché tant qu'il n'est pas périmé ni invalidé (alive_signal). Durée de vie par
+code en bougies (LIFE : RE 10, MHV 25, EXM / EXT 15, CSAK 30, MOM 10) ; il meurt plus tôt si un Extreme du sens
+contraire apparaît après lui (cycle terminé / TP) ou, pour RE et CSAK, si la clôture repasse du mauvais côté de la
+Mid BB. Seuls les codes utiles aux patterns visés (R, E, M par défaut) sont suivis : un CSAK ou un MOM récent ne
+masque donc plus un RE, un EXM ou un MHV encore en vie. `recent` ({tf: (code, sens, age)}) contient ces signaux
+(clé « alive » de feats, voir bbma_quality.features_one) ; None = signaux récents ignorés.
+Un TF sans signal sur la dernière bougie reprend son signal en vie. Il est
 affiché en grisé avec son âge (« −2 ») et sa lettre en minuscule dans `letters` (ex. « CeR »). Il compte dans le
 sens majoritaire, mais le cadre « tous alignés » n'est donné que si tous les signaux sont sur la dernière bougie.
 
@@ -38,6 +43,8 @@ Intégration dans app.py : voir build_table (colonne), main (CSS) et legend_html
 """
 import html
 
+import numpy as np
+
 import bbma_core as core
 
 # --- Paramètres -------------------------------------------------------------------------------
@@ -48,6 +55,10 @@ REQUIRE_SAME_SIDE = True                # les 3 lettres doivent aller dans le m�
 # Modes de lecture (sélecteur « Mode Pattern MTF » de app.py) : les 3 timeframes lus, du plus haut au plus bas.
 MODES = {"Swing": ("D1", "H4", "H1"), "Intraday": ("H1", "M15", "M5")}
 DEFAULT_MODE = "Swing"
+# Durée de vie de chaque code, en bougies du timeframe concerné (comme MAX_AGE de bbma_cycle).
+LIFE = {"RE": 10, "MHV": 25, "EXM": 15, "EXT": 15, "CSAK": 30, "MOM": 10}
+MID_BREAK_CODES = ("RE", "CSAK")        # ces signaux meurent si la clôture repasse du mauvais côté de la Mid BB
+MID_PERIOD = 20
 ALLOW_PARTIAL = True                    # False : seuls les patterns complets sont affichés (comportement d'origine)
 MIN_HITS = 1                            # signaux bien placés minimum pour afficher un pattern incomplet (1 à 3)
 PARTIAL_STRICT = False                  # True : un signal mal placé (ex. « O » en 2e position) écarte le pattern incomplet
@@ -92,6 +103,43 @@ def _best_fit(items, codes):
     return best
 
 
+def alive_signal(df, codes=None, life=None):
+    """Signal de pattern encore en vie sur les bougies fermées df : (code, sens, age) ou None.
+
+    age >= 1 : nombre de bougies avant la dernière (la dernière bougie est lue par detect, hors de cette fonction).
+    Un signal vit LIFE[code] bougies ; il est invalidé par un Extreme (EXM / EXT) du sens contraire survenu après lui,
+    et, pour MID_BREAK_CODES, par une clôture du mauvais côté de la Mid BB. Le plus récent l'emporte.
+    Seuls les codes dont la lettre figure dans `codes` (PATTERN_CODES) sont suivis. Affichage uniquement."""
+    codes = PATTERN_CODES if codes is None else codes
+    life = LIFE if life is None else life
+    useful = set("".join(codes)) if codes else None
+    wanted = [c for c in life if useful is None or LETTER.get(c) in useful]
+    n = len(df)
+    if not wanted or n < 2:
+        return None
+    sig = core._signals(df)
+    arr = lambda s: s.fillna(False).astype(bool).to_numpy()
+    ext = [arr(sig["EXM"][k]) | arr(sig["EXT"][k]) for k in (0, 1)]      # 0 = achat, 1 = vente
+    close = df["Close"].to_numpy(dtype=float)
+    mid = df["Close"].rolling(MID_PERIOD).mean().to_numpy(dtype=float)
+    best, best_key = None, None
+    for rank, code in enumerate(wanted):
+        for k, side in ((0, "B"), (1, "S")):
+            s = arr(sig[code][k])
+            for age in range(1, min(life[code], n - 1) + 1):
+                i = n - 1 - age
+                if not s[i]:
+                    continue
+                after = slice(i + 1, None)
+                dead = ext[1 - k][after].any()                           # Extreme contraire : cycle terminé
+                if not dead and code in MID_BREAK_CODES:
+                    dead = (close[after] < mid[after]).any() if k == 0 else (close[after] > mid[after]).any()
+                if not dead and (best_key is None or (age, rank) < best_key):
+                    best, best_key = (code, side, age), (age, rank)
+                break                                                    # le plus récent de ce code / sens suffit
+    return best
+
+
 def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recent=None,
                    codes=PATTERN_CODES, same_side=REQUIRE_SAME_SIDE,
                    partial=ALLOW_PARTIAL, min_hits=MIN_HITS, strict=PARTIAL_STRICT):
@@ -127,9 +175,14 @@ def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recen
         code, sens = (cells or {}).get(t, (None, None))
         letter = LETTER.get(code) if sens in ("B", "S") else None
         rec = (recent or {}).get(t)
-        if letter:
+        rec_ok = bool(rec and LETTER.get(rec[0]) and rec[1] in ("B", "S"))
+        useful = set("".join(codes)) if codes else None
+        # Un signal en vie utile au pattern prime sur un signal de la dernière bougie qui ne l'est pas (CSAK, MOM).
+        live_wins = letter and not (rec_ok and useful is not None and letter not in useful
+                                    and LETTER[rec[0]] in useful)
+        if live_wins:
             items.append({"tf": t, "state": "signal", "code": code, "letter": letter, "sens": sens, "age": 0})
-        elif rec and LETTER.get(rec[0]) and rec[1] in ("B", "S"):
+        elif rec_ok:
             items.append({"tf": t, "state": "recent", "code": rec[0], "letter": LETTER[rec[0]], "sens": rec[1],
                           "age": int(rec[2])})
         else:
@@ -185,7 +238,7 @@ def tooltip(p):
             lines.append(f"{i['tf']} : {CODE_NAMES[i['letter']]} · {SIDE_TEXT[i['sens']]} {ARROW[i['sens']]}{ok}")
         elif i["state"] == "recent":
             lines.append(f"{i['tf']} : {CODE_NAMES[i['letter']]} · {SIDE_TEXT[i['sens']]} {ARROW[i['sens']]}"
-                         f" · récent, il y a {i['age']} bougie(s) (grisé){ok}")
+                         f" · encore en vie, il y a {i['age']} bougie(s) (grisé){ok}")
         elif i["state"] == "absent":
             lines.append(f"{i['tf']} : données absentes")
         else:
@@ -312,7 +365,8 @@ def legend_section(mode=DEFAULT_MODE) -> str:
         f'({html.escape(tfs)}) : la 1re lettre est le TF le plus haut. Chaque lettre est colorée selon son sens ; '
         'les 3 lettres doivent aller dans le même sens (achat ou vente), sinon rien n’est affiché ; cadre coloré : les 3 '
         'sont sur la dernière bougie. Un pattern incomplet (ex. « R·· ») s’affiche dès qu’un signal est à la bonne place ; '
-        'les points marquent les places vides ou mal tenues. Lettre encadrée : bien placée ; lettre atténuée : mal placée. Si « Afficher les signaux récents » est coché, un TF sans signal reprend son dernier '
-        'signal, grisé avec son âge. Information seulement : n’entre ni dans l’entrée BBMA, ni dans la confiance, '
+        'les points marquent les places vides ou mal tenues. Lettre encadrée : bien placée ; lettre atténuée : mal placée. Un signal reste affiché tant qu’il est en vie : un TF sans signal sur la dernière bougie reprend '
+        'son dernier signal utile, grisé avec son âge (durée de vie : RE 10, MHV 25, EXM / EXT 15 bougies) ; il disparaît '
+        'si un Extreme contraire apparaît ou si la clôture repasse du mauvais côté de la Mid BB (RE). Information seulement : n’entre ni dans l’entrée BBMA, ni dans la confiance, '
         'ni dans la qualité, ni dans le tri.</div>'
     )

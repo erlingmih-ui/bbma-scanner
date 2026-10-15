@@ -17,6 +17,7 @@ import pandas as pd
 import bbma_core as core
 import bbma_fresh as bf
 import bbma_gauge as bg
+import bbma_patterns as bpat
 import bbma_session as bs
 from bbma_quality_codes import (
     ATR_PERIOD, CHASE_BELOW, CHASE_BELOW_MAX_ATR, CHASE_MISSING, CHASE_STEPS, CODE_WEIGHT,
@@ -53,8 +54,12 @@ def features_one(pair, tf, data):
         recent_entry = recent_entry_signal(df)   # dernier RE / MHV récent (colonne Entrée BBMA, grisé)
     except Exception:
         recent_entry = None
+    try:
+        alive = bpat.alive_signal(df)            # signal de pattern encore en vie (colonne Pattern MTF)
+    except Exception:
+        alive = None
     return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close,
-            "recent": recent, "recent_entry": recent_entry}
+            "recent": recent, "recent_entry": recent_entry, "alive": alive}
 
 
 def recent_entry_signal(df, lookback=core.RECENT_BARS):

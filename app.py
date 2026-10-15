@@ -29,7 +29,7 @@ APP_TITLE = "BBMA OA MTF Scanner"
 DEFAULT_PAIRS = "EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF NZDUSD EURJPY GBPJPY EURGBP XAUUSD BTCUSD"
 MAX_PAIRS = 12
 CACHE_TTL = 240          # secondes ; inférieur à AUTO_REFRESH pour qu'un vrai scan ait lieu à chaque cycle
-SCAN_VERSION = 6         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
+SCAN_VERSION = 7         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
 AUTO_REFRESH = 300       # secondes entre deux scans automatiques
 RSI_LOW, RSI_HIGH = 30, 70   # repères visuels uniquement (couleur), aucun effet sur les signaux
 
@@ -371,7 +371,7 @@ def gauge_cell(g) -> str:
 
 
 def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None,
-                patterns=True, pat_mode=bpat.DEFAULT_MODE) -> str:
+                patterns=True, pat_mode=bpat.DEFAULT_MODE, pat_alive=True) -> str:
     """Tableau : Pair, timeframes, Pattern MTF (facultatif), Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
     Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
     nuc = nuc or {}
@@ -396,7 +396,10 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         q_score, q_grade = bs.cap_grade(q_score, q_grade, kind)
         n = nuc.get(p)
         ghost = recent_entry(cells, tfs, feats, p, use_filter, d1) if show_recent and not tf_e else None
-        pat_recent = {t: (feats.get((p, t)) or {}).get("recent") for t in tfs} if show_recent else None
+        if pat_alive:    # signaux encore en vie (bbma_patterns.alive_signal), indépendants de la case « récents »
+            pat_recent = {t: (feats.get((p, t)) or {}).get("alive") for t in tfs}
+        else:
+            pat_recent = {t: (feats.get((p, t)) or {}).get("recent") for t in tfs} if show_recent else None
         pat_td = [bpat.pattern_cell(bpat.detect_pattern(
             cells, tfs, avail, preferred=bpat.MODES.get(pat_mode, bpat.PATTERN_TFS), recent=pat_recent))] if patterns else []
         tds = tf_tds + pat_td + [synth_cell(tf_e, code_e, sens_e, kind, ghost), conf_cell(score),
@@ -481,7 +484,12 @@ def main():
     show_pattern = st.sidebar.checkbox("Colonne Pattern MTF", True,
                                        help="Affiche le pattern REM, RRE ou REE (R = Reentry, E = Extreme, M = MHV), complet ou incomplet, formé par les 3 timeframes du mode choisi. Vide sinon.")
     pat_mode = bpat.DEFAULT_MODE
+    pat_alive = True
     if show_pattern:
+        pat_alive = st.sidebar.checkbox("Garder les patterns en vie", True,
+                                        help="Un signal reste affiché (grisé, avec son âge) tant qu'il est en vie : durée limitée "
+                                             "(RE 10, MHV 25, EXM / EXT 15 bougies) et arrêtée par un Extreme contraire. "
+                                             "Décoché : seuls les signaux de la dernière bougie (et les récents si la case est cochée).")
         pat_mode = st.sidebar.radio("Mode Pattern MTF", list(bpat.MODES), horizontal=True,
                                     format_func=lambda m: f"{m} ({' · '.join(bpat.MODES[m])})",
                                     help="Swing : D1 → H4 → H1. Intraday : H1 → M15 → M5, plus de signaux mais plus de bruit ; "
@@ -510,7 +518,7 @@ def main():
 
         table_css = bpat.with_css(CSS, fit_screen)   # un seul bloc <style> (CommonMark)
         st.markdown(table_css + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength,
-                                            patterns=show_pattern, pat_mode=pat_mode),
+                                            patterns=show_pattern, pat_mode=pat_mode, pat_alive=pat_alive),
                     unsafe_allow_html=True)
         legend_open = st.session_state.get("show_legend", False)
         st.button("Masquer la légende" if legend_open else "Afficher la légende",
