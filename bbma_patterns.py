@@ -12,6 +12,8 @@ Pattern INCOMPLET : il s'affiche dès qu'au moins un signal est à la bonne plac
 d'un timeframe est celle du pattern cible à cette position (ex. D1 = R pour REM / RRE / REE ; H4 = E pour REM / REE ;
 H1 = M pour REM, H1 = E pour REE). Le pattern cible retenu est celui qui compte le plus de signaux bien placés ;
 la ligne de lecture le montre avec des points pour les places vides ou mal tenues (ex. « ▲ R·· », « ▼ ·E· »).
+Réglages : ALLOW_PARTIAL (activer / couper), MIN_HITS (signaux bien placés minimum), PARTIAL_STRICT (écarter
+le pattern si une lettre est mal placée). Sur les chips : lettre encadrée = bien placée, atténuée = mal placée.
 Un pattern complet garde son affichage d'origine (« ▲ REM ») et son cadre coloré.
 REQUIRE_SAME_SIDE = True : le pattern doit en plus aller dans le même sens (achat ou vente) sur les 3 TF.
 
@@ -40,6 +42,9 @@ PATTERN_TFS = ("D1", "H4", "H1")       # None : les N timeframes cochés les plu
 N_TFS = 3
 PATTERN_CODES = ("REM", "RRE", "REE")   # R = Reentry, E = Extreme, M = MHV ; None : aucun filtre
 REQUIRE_SAME_SIDE = True                # les 3 lettres doivent aller dans le même sens (achat ou vente)
+ALLOW_PARTIAL = True                    # False : seuls les patterns complets sont affichés (comportement d'origine)
+MIN_HITS = 1                            # signaux bien placés minimum pour afficher un pattern incomplet (1 à 3)
+PARTIAL_STRICT = False                  # True : un signal mal placé (ex. « O » en 2e position) écarte le pattern incomplet
 
 LETTER = {"RE": "R", "EXM": "E", "EXT": "E", "MHV": "M", "CSAK": "C", "MOM": "O"}
 CODE_NAMES = {
@@ -70,17 +75,20 @@ def select_tfs(tfs, preferred=PATTERN_TFS, n=N_TFS):
 def _best_fit(items, codes):
     """(nombre de signaux bien placés, pattern cible, liste de booléens par TF) pour le meilleur pattern de `codes`.
     Un signal est bien placé si sa lettre est celle du pattern cible à la même position."""
-    best = (0, None, None)
+    best, best_key = (0, None, None), None
     for code in codes or ():
         hits = [bool(i["letter"]) and k < len(code) and i["letter"] == code[k] for k, i in enumerate(items)]
         n = sum(hits)
-        if n > best[0]:
-            best = (n, code, hits)
+        bad = sum(1 for i, h in zip(items, hits) if i["letter"] and not h)    # signaux mal placés
+        key = (n, -bad)                    # à égalité de signaux bien placés, le moins de signaux mal placés
+        if n > 0 and (best_key is None or key > best_key):
+            best, best_key = (n, code, hits), key
     return best
 
 
 def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recent=None,
-                   codes=PATTERN_CODES, same_side=REQUIRE_SAME_SIDE):
+                   codes=PATTERN_CODES, same_side=REQUIRE_SAME_SIDE,
+                   partial=ALLOW_PARTIAL, min_hits=MIN_HITS, strict=PARTIAL_STRICT):
     """Pattern MTF d'une paire.
 
     cells : {tf: (code, sens)} (le résultat du scan) ; tfs : timeframes affichés ;
@@ -133,14 +141,16 @@ def detect_pattern(cells, tfs, avail=None, preferred=PATTERN_TFS, n=N_TFS, recen
     if hits:
         for i, h in zip(items, hits):
             i["fit"] = h
-    partial = (not full) and hits_n >= 1
-    match = (full or partial) and (aligned or not same_side)
-    shape = "".join(target[k] if hits[k] else "·" for k in range(len(items))) if partial else None
+    misplaced = hits is not None and any(i["letter"] and not h for i, h in zip(items, hits))
+    is_partial = (partial and not full and hits_n >= max(1, min_hits)
+                  and not (strict and misplaced))
+    match = (full or is_partial) and (aligned or not same_side)
+    shape = "".join(target[k] if hits[k] else "·" for k in range(len(items))) if is_partial else None
     return {"tfs": sel, "items": items, "letters": letters, "side": side, "buy": nb, "sell": ns,
             "active": nb + ns, "live": sum(i["state"] == "signal" for i in items), "total": len(items),
             "aligned": aligned, "match": match, "code": pattern if match and full and codes else None,
-            "partial": bool(match and partial), "hits": hits_n if partial else 0,
-            "target": target if partial else None, "shape": shape}
+            "partial": bool(match and is_partial), "hits": hits_n if is_partial else 0,
+            "target": target if is_partial else None, "shape": shape}
 
 
 # --- Rendu HTML -------------------------------------------------------------------------------
@@ -162,7 +172,9 @@ def tooltip(p):
         if p["letters"].upper() in PATTERN_CODES and not p["aligned"]:
             lines.append("Pattern écarté : sens différents d'un TF à l'autre")
     for i in p["items"]:
-        ok = " ✓ bien placé" if p.get("partial") and i.get("fit") else ""
+        ok = ""
+        if p.get("partial") and i.get("letter"):
+            ok = " ✓ bien placé" if i.get("fit") else " ✗ mal placé"
         if i["state"] == "signal":
             lines.append(f"{i['tf']} : {CODE_NAMES[i['letter']]} · {SIDE_TEXT[i['sens']]} {ARROW[i['sens']]}{ok}")
         elif i["state"] == "recent":
@@ -180,13 +192,16 @@ def tooltip(p):
     return "&#10;".join(html.escape(x) for x in lines)
 
 
-def _chip(i) -> str:
+def _chip(i, partial=False) -> str:
     """Pastille d'un TF : lettre et nom ; signal récent grisé avec son âge (« D1 −2 »)."""
     tf = html.escape(i["tf"])
+    mark = ""
+    if partial and i["letter"]:                     # pattern incomplet : bien placé (cadre) / mal placé (atténué)
+        mark = " ok" if i.get("fit") else " bad"
     if i["state"] == "recent":
-        return f'<span class="pc {i["sens"]} g"><b>{i["letter"]}</b><i>{tf} −{i["age"]}</i></span>'
+        return f'<span class="pc {i["sens"]} g{mark}"><b>{i["letter"]}</b><i>{tf} −{i["age"]}</i></span>'
     letter = i["letter"] or ("?" if i["state"] == "absent" else "–")
-    return f'<span class="pc {i["sens"] or ""}"><b>{letter}</b><i>{tf}</i></span>'
+    return f'<span class="pc {i["sens"] or ""}{mark}"><b>{letter}</b><i>{tf}</i></span>'
 
 
 def pattern_cell(p) -> str:
@@ -199,7 +214,7 @@ def pattern_cell(p) -> str:
             f'<span class="pc"><b>{"?" if i["state"] == "absent" else "–"}</b><i>{html.escape(i["tf"])}</i></span>'
             for i in p["items"])
         return f'<td class="pat none" title="{tip}"><span class="pt">{chips}</span></td>'
-    chips = "".join(_chip(i) for i in p["items"])
+    chips = "".join(_chip(i, p.get("partial")) for i in p["items"])
     if p["code"] and p["side"] in ("B", "S"):
         read = f'{ARROW[p["side"]]} {p["code"]}' + ("" if p["aligned"] else " ⇅")
     elif p.get("partial") and p["side"] in ("B", "S"):
@@ -225,6 +240,8 @@ table.bb td.pat .pc i{font-style:normal;font-size:8px;font-weight:600;margin-top
 table.bb td.pat .pc.B{background:rgba(38,166,154,.22);color:#26a69a}
 table.bb td.pat .pc.S{background:rgba(239,83,80,.22);color:#ef5350}
 table.bb td.pat .pc.g{opacity:.55;box-shadow:inset 0 0 0 1px currentColor;background:transparent}
+table.bb td.pat .pc.ok{box-shadow:0 0 0 1px currentColor}
+table.bb td.pat .pc.bad{opacity:.4}
 table.bb td.pat .pa{margin-top:4px;font-size:10px;font-weight:700;color:#787b86}
 table.bb td.pat .pa.B{color:#26a69a}
 table.bb td.pat .pa.S{color:#ef5350}
@@ -288,7 +305,7 @@ def legend_section() -> str:
         f'({html.escape(tfs)}) : la 1re lettre est le TF le plus haut. Chaque lettre est colorée selon son sens ; '
         'les 3 lettres doivent aller dans le même sens (achat ou vente), sinon rien n’est affiché ; cadre coloré : les 3 '
         'sont sur la dernière bougie. Un pattern incomplet (ex. « R·· ») s’affiche dès qu’un signal est à la bonne place ; '
-        'les points marquent les places vides ou mal tenues. Si « Afficher les signaux récents » est coché, un TF sans signal reprend son dernier '
+        'les points marquent les places vides ou mal tenues. Lettre encadrée : bien placée ; lettre atténuée : mal placée. Si « Afficher les signaux récents » est coché, un TF sans signal reprend son dernier '
         'signal, grisé avec son âge. Information seulement : n’entre ni dans l’entrée BBMA, ni dans la confiance, '
         'ni dans la qualité, ni dans le tri.</div>'
     )
