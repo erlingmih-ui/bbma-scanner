@@ -1,14 +1,15 @@
 --- /mnt/user-data/uploads/app.py	2026-10-22 18:30:17.496927000 +0000
-+++ app.py	2026-10-23 20:07:33.556188083 +0000
-@@ -21,6 +21,7 @@
++++ app.py	2026-10-23 21:18:59.132399208 +0000
+@@ -21,6 +21,8 @@
  import bbma_patterns as bpat   # colonne « Pattern MTF » (lettres R / E / M / C / O)
  import bbma_pairs as bp
  import bbma_quality as bq
 +import bbma_levels as bl   # colonne Niveaux : scan indépendant du moteur BBMA
++import bbma_journal as bj  # journal de test en avant (CSV), sans effet sur le tableau
  from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
  
  logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
-@@ -158,10 +159,20 @@
+@@ -158,13 +160,22 @@
          '<div><b>Confiance</b> ≥ 70 % : la plupart des timeframes vont dans le même sens. <b>Jauge</b> : sa couleur '
          'doit rester du côté de l’entrée. <b>RSI</b> sous chaque cellule : il pèse dans le score Qualité ; un RSI '
          'extrême dans le sens du trade le réduit.</div>'
@@ -19,7 +20,7 @@
 +        '<span class="chip buy">Sup x,x</span> : support en dessous du prix.</div>'
 +        '<div>La <b>barre</b> montre la place disponible : verte sous le prix, rouge au-dessus. Une partie fine '
 +        'signifie un niveau proche. Chiffre en <b>gras</b> : niveau à moins de 0,5 ATR. Bordure ambrée : '
-+        'clôture sur un niveau.</div>'
++        'clôture à moins de 0,15 ATR d’un niveau valide. Un niveau déjà franchi depuis son dernier contact est ignoré.</div>'
 +        '<div>Pour un <b>achat</b>, une résistance proche est un obstacle et un support proche un appui. '
 +        'Pour une <b>vente</b>, c’est l’inverse. Les niveaux n’entrent pas dans le score : ils aident à juger, '
 +        'ils ne décident pas.</div>'
@@ -29,8 +30,12 @@
 -        '<h4>7. Avant d’agir</h4>'
 +        '<h4>8. Avant d’agir</h4>'
          '<div>Vérifiez le signal sur votre propre graphique, puis fixez votre risque et votre taille de position. '
-         'Testez la méthode en compte démo. Le module <b>bbma_backtest.py</b> permet de mesurer les grades sur '
-         'l’historique.</div>'
+-        'Testez la méthode en compte démo. Le module <b>bbma_backtest.py</b> permet de mesurer les grades sur '
+-        'l’historique.</div>'
++        'Testez la méthode en compte démo. Le fichier <b>journal/entrees.csv</b> enregistre chaque entrée affichée, pour la revérifier sur votre graphique.</div>'
+         '</div>'
+     )
+ 
 @@ -250,6 +261,12 @@
      return bst.fetch_strength(pairs)
  
@@ -74,15 +79,19 @@
      return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
  
  
-@@ -509,6 +528,7 @@
+@@ -509,6 +528,11 @@
              res, trends, failed, total, ts, feats, nuc = run_scan(
                  tuple(pairs), tuple(tfs), SCAN_VERSION, st.session_state.get("refresh_nonce", 0))
              strength = run_strength(tuple(pairs), st.session_state.get("refresh_nonce", 0))
 +            lvl_now = run_levels(tuple(pairs), st.session_state.get("refresh_nonce", 0))
++            try:
++                bj.record(bj.entry_rows(list(pairs), list(tfs), res, trends, feats, lvl_now, use_filter))
++            except Exception:
++                logging.getLogger("bbma").exception("journal : écriture impossible")
  
          if failed:
              st.warning(
-@@ -518,7 +538,7 @@
+@@ -518,7 +542,7 @@
  
          table_css = bpat.with_css(CSS, fit_screen)   # un seul bloc <style> (CommonMark)
          st.markdown(table_css + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength,

@@ -1,19 +1,18 @@
 """Niveaux de support et de résistance : colonne « Niveaux » du tableau.
 
-Module totalement isolé du moteur BBMA :
-  - il ne modifie aucun fichier existant et n'est appelé par aucun calcul de signal, de grade ou de score ;
-  - il fait son propre scan (scan_levels) et renvoie ses propres erreurs ;
-  - la colonne affiche, pour chaque paire, la résistance la plus proche au-dessus du prix et le support
-    le plus proche en dessous, sur un timeframe de référence fixe (LEVELS_TF), indépendamment des signaux.
+Module isolé du moteur BBMA : il n'est appelé par aucun calcul de signal, de grade ou de score.
+Il fait son propre scan (scan_levels) et renvoie ses propres erreurs.
 
-Sources de niveaux (bougies fermées uniquement) :
-  - pivots (swings) : un haut ou un bas local dépassant strictement k bougies de chaque côté.
-    Un pivot n'est retenu qu'après k bougies suivantes (pas de look-ahead) ;
-  - PDH / PDL : plus haut et plus bas de la dernière journée D1 fermée (timeframes intraday).
+Règles (bougies fermées uniquement) :
+  - pivots (swings) : un haut ou un bas dépassant strictement k bougies de chaque côté. Un pivot n'est
+    retenu qu'après k bougies suivantes (pas de look-ahead) ;
+  - PDH / PDL : plus haut et plus bas de la dernière journée D1 fermée (timeframes intraday) ;
+  - force d'une zone : somme des contacts, chacun pondéré par son âge (demi-vie HALF_LIFE_BARS bougies) ;
+  - niveau franchi : si une clôture a dépassé le niveau de BREAK_ATR × ATR depuis son dernier contact, du côté
+    opposé à celui où se trouve le prix, le niveau est ignoré. Un support traversé vers le bas n'est donc
+    plus un support. La réaffirmation d'un niveau franchi (retest) n'est pas modélisée.
 
-Les pivots proches (à moins de TOL_ATR × ATR de la moyenne de leur groupe) forment une zone ;
-le nombre de touches donne la force. Les hauts et les bas sont regroupés ensemble, car un ancien
-sommet peut redevenir support. Toutes les distances sont en multiples d'ATR.
+Toutes les distances sont des multiples d'ATR, pour être comparables entre instruments.
 """
 import html
 import logging
@@ -28,8 +27,13 @@ LEVELS_TF = "H1"         # timeframe affiché dans la colonne (indépendant des 
 PIVOT_K = 3              # bougies de chaque côté pour valider un pivot
 TOL_ATR = 0.5            # distance maximale (en ATR) pour regrouper deux pivots dans une zone
 ATR_PERIOD = 14
-NEAR_ATR = 0.3           # clôture à moins de NEAR_ATR × ATR d'une zone : « sur un niveau »
+NEAR_ATR = 0.15          # clôture à moins de NEAR_ATR × ATR d'un niveau valide : « sur un niveau »
+NEAR_WARN_ATR = 0.5      # niveau à moins de NEAR_WARN_ATR × ATR : chiffre en gras
+BREAK_ATR = 0.3          # niveau franchi depuis son dernier contact : clôture au-delà de BREAK_ATR × ATR
+HALF_LIFE_BARS = 240     # un contact perd la moitié de son poids toutes les 240 bougies (~10 jours en H1)
 PDH_TFS = ("M5", "M15", "H1", "H4")   # PDH / PDL seulement sur les timeframes intraday
+
+RED, GREEN, GREY, AMBER = "#ef5350", "#26a69a", "#787b86", "#f0b90b"
 
 
 def _atr(df, n=ATR_PERIOD):
@@ -41,68 +45,102 @@ def _atr(df, n=ATR_PERIOD):
     return tr.rolling(n).mean()
 
 
-def confirmed_pivots(df, k=PIVOT_K):
-    """Prix des pivots (hauts et bas) confirmés dans df, triés.
+def confirmed_pivots_idx(df, k=PIVOT_K):
+    """Pivots (hauts et bas) confirmés : liste de (prix, indice de la bougie), triée par indice.
 
     Un pivot au centre c n'est retenu que si c + k <= len(df) - 1 : il faut k bougies après lui."""
     if len(df) < 2 * k + 1:
         return []
-    prices = []
+    out = []
     for col, sign in (("High", 1), ("Low", -1)):
         x = sign * df[col].to_numpy(float)                 # pour les bas : on cherche un maximum de -Low
         win = sliding_window_view(x, 2 * k + 1)            # ligne j : fenêtre centrée sur j + k
         centre = win[:, k]
         # Pivot strict : la bougie centrale dépasse STRICTEMENT ses voisines (évite les plateaux)
         others_max = np.maximum(win[:, :k].max(axis=1), win[:, k + 1:].max(axis=1))
-        prices.extend((sign * centre[centre > others_max]).tolist())
-    return sorted(prices)
+        for j in np.nonzero(centre > others_max)[0]:
+            out.append((float(sign * centre[j]), int(j + k)))
+    return sorted(out, key=lambda t: t[1])
 
 
-def _cluster(prices, tol):
-    """Regroupe des prix triés : un prix rejoint le groupe s'il est à moins de tol de la moyenne du groupe.
-    Retourne une liste de {price, touches}."""
+def confirmed_pivots(df, k=PIVOT_K):
+    """Prix des pivots confirmés, triés."""
+    return sorted(p for p, _ in confirmed_pivots_idx(df, k))
+
+
+def _cluster(points, tol, n):
+    """Regroupe des pivots (prix, indice) : un point rejoint le groupe s'il est à moins de tol de sa moyenne.
+
+    n : nombre de bougies disponibles, utilisé pour pondérer les contacts par leur âge.
+    Retourne une liste de zones {price, touches, strength, last, src}."""
     groups, group = [], []
-    for p in sorted(prices):
-        if group and p - np.mean(group) > tol:
+    for p, i in sorted(points):
+        if group and p - np.mean([q for q, _ in group]) > tol:
             groups.append(group)
             group = []
-        group.append(p)
+        group.append((p, i))
     if group:
         groups.append(group)
-    return [{"price": float(np.mean(g)), "touches": len(g)} for g in groups]
+    zones = []
+    for g in groups:
+        idx = [i for _, i in g]
+        zones.append({
+            "price": float(np.mean([p for p, _ in g])),
+            "touches": len(g),
+            "strength": float(sum(0.5 ** ((n - 1 - i) / HALF_LIFE_BARS) for i in idx)),
+            "last": max(idx),
+            "src": "pivot",
+        })
+    return zones
 
 
-def sr_levels(df, extra=(), k=PIVOT_K, tol_atr=TOL_ATR, near_atr=NEAR_ATR):
-    """Résistance et support les plus proches de la dernière bougie fermée de df.
+def sr_levels(df, extra=(), k=PIVOT_K, tol_atr=TOL_ATR, near_atr=NEAR_ATR, break_atr=BREAK_ATR):
+    """Résistance et support valides les plus proches de la dernière bougie fermée de df.
 
-    extra : niveaux fournis par l'appelant, sous la forme (prix, source), par exemple (PDH, "PDH").
+    extra : niveaux fournis par l'appelant, sous la forme (prix, source, indice du dernier contact).
     Retourne None si l'ATR n'est pas calculable, sinon :
-      res      : {atr, touches, src} de la résistance la plus proche au-dessus du prix, ou None
-      sup      : {atr, touches, src} du support le plus proche sous le prix, ou None
-      on_level : True si la clôture est à moins de near_atr × ATR d'une zone
-      atr      : valeur de l'ATR utilisée"""
+      res      : {atr, touches, src, strength} de la résistance la plus proche au-dessus du prix, ou None
+      sup      : {atr, touches, src, strength} du support le plus proche sous le prix, ou None
+      on_level : True si la clôture est à moins de near_atr × ATR d'un niveau valide
+      atr      : valeur de l'ATR utilisée
+      casses   : nombre de niveaux ignorés car déjà franchis depuis leur dernier contact"""
     if len(df) <= ATR_PERIOD:
         return None
     a = _atr(df).iloc[-1]
     if pd.isna(a) or a <= 0:
         return None
-    close = float(df["Close"].iloc[-1])
+    closes = df["Close"].to_numpy(float)
+    n, close = len(df), closes[-1]
 
-    zones = [dict(z, src="pivot") for z in _cluster(confirmed_pivots(df, k), tol_atr * a)]
-    zones += [{"price": float(p), "touches": 1, "src": s} for p, s in extra]
+    zones = _cluster(confirmed_pivots_idx(df, k), tol_atr * a, n)
+    zones += [{"price": float(p), "touches": 1, "strength": 1.0, "last": int(i), "src": s}
+              for p, s, i in extra]
+
+    valid, broken = [], 0
+    for z in zones:
+        seg = closes[max(z["last"] + 1, 0):]                 # clôtures depuis le dernier contact
+        if z["price"] > close:                               # résistance candidate : franchie vers le haut ?
+            gone = seg.size > 0 and bool((seg > z["price"] + break_atr * a).any())
+        else:                                                # support candidat : franchi vers le bas ?
+            gone = seg.size > 0 and bool((seg < z["price"] - break_atr * a).any())
+        if gone:
+            broken += 1
+        else:
+            valid.append(z)
 
     near = near_atr * a
-    above = [z for z in zones if z["price"] > close + near]
-    below = [z for z in zones if z["price"] < close - near]
-    on = any(abs(z["price"] - close) <= near for z in zones)
+    above = [z for z in valid if z["price"] > close + near]
+    below = [z for z in valid if z["price"] < close - near]
+    on = any(abs(z["price"] - close) <= near for z in valid)
 
     def nearest(cands):
         if not cands:
             return None
         z = min(cands, key=lambda x: abs(x["price"] - close))
-        return {"atr": abs(z["price"] - close) / a, "touches": z["touches"], "src": z["src"]}
+        return {"atr": abs(z["price"] - close) / a, "touches": z["touches"], "src": z["src"],
+                "strength": round(z["strength"], 2)}
 
-    return {"res": nearest(above), "sup": nearest(below), "on_level": on, "atr": a}
+    return {"res": nearest(above), "sup": nearest(below), "on_level": on, "atr": a, "casses": broken}
 
 
 def levels_one(pair, tf, data):
@@ -118,8 +156,10 @@ def levels_one(pair, tf, data):
     if tf in PDH_TFS:
         d1 = bs.closed_bars(pair, "D1", data)
         if d1 is not None and len(d1):
-            day = d1.iloc[-1]                  # dernière journée D1 fermée = jour précédent
-            extra = ((float(day["High"]), "PDH"), (float(day["Low"]), "PDL"))
+            day = d1.iloc[-1]                                  # dernière journée D1 fermée = jour précédent
+            start = int(df.index.searchsorted(d1.index[-1] + pd.Timedelta(days=1)))   # premier bougie du jour courant
+            i = start - 1                                      # contrôle de franchissement à partir du jour courant
+            extra = ((float(day["High"]), "PDH", i), (float(day["Low"]), "PDL", i))
     return sr_levels(df, extra=extra)
 
 
@@ -150,26 +190,25 @@ def _fr(x):
 
 
 def describe(levels):
-    """Texte détaillé (infobulle) décrivant les niveaux."""
+    """Texte détaillé (infobulle)."""
     if not levels:
         return "Niveaux non calculables"
     parts = []
     for name, lvl, word in (("Résistance", levels["res"], "au-dessus"), ("Support", levels["sup"], "en dessous")):
         if lvl:
-            parts.append(f"{name} {word} à {_fr(lvl['atr'])} ATR ({lvl['touches']} touche(s), {lvl['src']})")
+            parts.append(f"{name} {word} à {_fr(lvl['atr'])} ATR "
+                         f"({lvl['touches']} touche(s), force {_fr(lvl['strength'])}, {lvl['src']})")
         else:
-            parts.append(f"{name} : aucun niveau connu")
+            parts.append(f"{name} : aucun niveau valide")
+    if levels.get("casses"):
+        parts.append(f"{levels['casses']} niveau(x) déjà franchi(s) ignoré(s)")
     if levels["on_level"]:
         parts.append("clôture sur un niveau")
     return " · ".join(parts)
 
 
-RED, GREEN, GREY, AMBER = "#ef5350", "#26a69a", "#787b86", "#f0b90b"
-NEAR_WARN_ATR = 0.5      # en dessous : niveau très proche, chiffre affiché en gras
-
-
 def short(levels):
-    """Texte d'une ligne pour l'infobulle et les tests : « Rés 2,0 · Sup 1,2 »."""
+    """Texte d'une ligne : « Rés 2,0 · Sup 1,2 »."""
     up = "–" if not levels or not levels["res"] else _fr(levels["res"]["atr"])
     dn = "–" if not levels or not levels["sup"] else _fr(levels["sup"]["atr"])
     return f"Rés {up} · Sup {dn}"

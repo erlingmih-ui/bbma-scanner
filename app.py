@@ -22,6 +22,7 @@ import bbma_patterns as bpat   # colonne « Pattern MTF » (lettres R / E / M / 
 import bbma_pairs as bp
 import bbma_quality as bq
 import bbma_levels as bl   # colonne Niveaux : scan indépendant du moteur BBMA
+import bbma_journal as bj  # journal de test en avant (CSV), sans effet sur le tableau
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
@@ -165,7 +166,7 @@ def guide_html() -> str:
         '<span class="chip buy">Sup x,x</span> : support en dessous du prix.</div>'
         '<div>La <b>barre</b> montre la place disponible : verte sous le prix, rouge au-dessus. Une partie fine '
         'signifie un niveau proche. Chiffre en <b>gras</b> : niveau à moins de 0,5 ATR. Bordure ambrée : '
-        'clôture sur un niveau.</div>'
+        'clôture à moins de 0,15 ATR d’un niveau valide. Un niveau déjà franchi depuis son dernier contact est ignoré.</div>'
         '<div>Pour un <b>achat</b>, une résistance proche est un obstacle et un support proche un appui. '
         'Pour une <b>vente</b>, c’est l’inverse. Les niveaux n’entrent pas dans le score : ils aident à juger, '
         'ils ne décident pas.</div>'
@@ -174,8 +175,7 @@ def guide_html() -> str:
         'contraire sur un timeframe supérieur ; marché fermé ou données absentes.</div>'
         '<h4>8. Avant d’agir</h4>'
         '<div>Vérifiez le signal sur votre propre graphique, puis fixez votre risque et votre taille de position. '
-        'Testez la méthode en compte démo. Le module <b>bbma_backtest.py</b> permet de mesurer les grades sur '
-        'l’historique.</div>'
+        'Testez la méthode en compte démo. Le fichier <b>journal/entrees.csv</b> enregistre chaque entrée affichée, pour la revérifier sur votre graphique.</div>'
         '</div>'
     )
 
@@ -529,6 +529,10 @@ def main():
                 tuple(pairs), tuple(tfs), SCAN_VERSION, st.session_state.get("refresh_nonce", 0))
             strength = run_strength(tuple(pairs), st.session_state.get("refresh_nonce", 0))
             lvl_now = run_levels(tuple(pairs), st.session_state.get("refresh_nonce", 0))
+            try:
+                bj.record(bj.entry_rows(list(pairs), list(tfs), res, trends, feats, lvl_now, use_filter))
+            except Exception:
+                logging.getLogger("bbma").exception("journal : écriture impossible")
 
         if failed:
             st.warning(
