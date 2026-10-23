@@ -167,8 +167,10 @@ def levels_one(pair, tf, data):
 def levels_cell(levels, sens) -> str:
     """Cellule « Niveaux » : obstacle devant le prix dans le sens du trade, détail au survol."""
     import html
-    if not levels or sens not in ("B", "S"):
-        return '<td class="lvl none">–</td>'
+    if sens not in ("B", "S"):
+        return '<td class="lvl none">–</td>'            # pas d'entrée : rien à afficher
+    if not levels:
+        return '<td class="lvl none" title="Niveaux non calculables (voir le terminal)">n/d</td>'
     ob = room_atr(levels, sens)
     short = "libre" if ob is None else f"{_fr(ob)} ATR"
     tip = html.escape(label(levels, sens))
