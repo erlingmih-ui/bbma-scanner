@@ -164,11 +164,40 @@ def describe(levels):
     return " · ".join(parts)
 
 
+RED, GREEN, GREY, AMBER = "#ef5350", "#26a69a", "#787b86", "#f0b90b"
+NEAR_WARN_ATR = 0.5      # en dessous : niveau très proche, chiffre affiché en gras
+
+
 def short(levels):
-    """Texte court de la cellule : ▲ distance résistance · ▼ distance support, en ATR."""
+    """Texte d'une ligne pour l'infobulle et les tests : « Rés 2,0 · Sup 1,2 »."""
     up = "–" if not levels or not levels["res"] else _fr(levels["res"]["atr"])
     dn = "–" if not levels or not levels["sup"] else _fr(levels["sup"]["atr"])
-    return f"▲ {up} · ▼ {dn}"
+    return f"Rés {up} · Sup {dn}"
+
+
+def _side_html(name, lvl, color):
+    """Une ligne « Rés 1,1 » ou « Sup 0,8 » ; en gras si le niveau est très proche."""
+    if not lvl:
+        return f'<div style="color:{GREY}">{name} –</div>'
+    weight = "700" if lvl["atr"] < NEAR_WARN_ATR else "400"
+    return f'<div style="color:{color};font-weight:{weight}">{name} {_fr(lvl["atr"])}</div>'
+
+
+def _bar_html(levels):
+    """Barre de place disponible : vert = sous le prix, rouge = au-dessus. Une partie fine = niveau proche."""
+    res, sup = levels["res"], levels["sup"]
+    if res and sup:
+        tot = res["atr"] + sup["atr"]
+        left = 50.0 if tot <= 0 else 100.0 * sup["atr"] / tot
+    elif sup:
+        left = 100.0
+    elif res:
+        left = 0.0
+    else:
+        left = 50.0
+    return ('<div style="display:flex;height:4px;border-radius:2px;overflow:hidden;margin:3px 0">'
+            f'<div style="width:{left:.0f}%;background:{GREEN}"></div>'
+            f'<div style="flex:1;background:{RED}"></div></div>')
 
 
 def levels_cell(levels, error=None) -> str:
@@ -176,4 +205,8 @@ def levels_cell(levels, error=None) -> str:
     if not levels:
         tip = html.escape(error or "Niveaux non calculables (voir le terminal)")
         return f'<td class="lvl none" title="{tip}">n/d</td>'
-    return f'<td class="lvl" title="{html.escape(describe(levels))}">{short(levels)}</td>'
+    tip = html.escape(describe(levels))
+    ring = f";box-shadow:0 0 0 1px {AMBER}" if levels["on_level"] else ""
+    body = _side_html("Rés", levels["res"], RED) + _side_html("Sup", levels["sup"], GREEN)
+    return (f'<td class="lvl" title="{tip}" style="font-size:0.8em;line-height:1.25{ring}">'
+            f"{body}{_bar_html(levels)}</td>")
