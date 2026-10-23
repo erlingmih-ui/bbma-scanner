@@ -163,7 +163,12 @@ def guide_html() -> str:
         '<h4>6. Où sont les niveaux ? (colonne Niveaux)</h4>'
         '<div>Colonne informative, calculée sur le H1 quel que soit le timeframe choisi. '
         '<span class="chip sell">Rés x,x</span> : résistance au-dessus du prix, à x,x fois l’ATR (volatilité récente). '
-        '<span class="chip buy">Sup x,x</span> : support en dessous du prix.</div>'
+        '<span class="chip buy">Sup x,x</span> : support en dessous du prix. Pour un <b>achat</b>, la résistance est '
+        'l’obstacle et le support l’appui ; pour une <b>vente</b>, l’inverse.</div>'
+        '<div>Ligne <b>barrée grise</b> : niveau déjà franchi depuis son dernier contact. Il est affiché pour '
+        'mémoire et n’est pas compté comme obstacle.</div>'
+        '<div><b>Réglages non validés</b> : pivots confirmés sur 3 bougies, regroupement à 0,5 ATR, franchissement '
+        'à 0,3 ATR. Ce sont des choix de départ, pas des valeurs démontrées.</div>'
         '<div>La <b>barre</b> montre la place disponible : verte sous le prix, rouge au-dessus. Une partie fine '
         'signifie un niveau proche. Chiffre en <b>gras</b> : niveau à moins de 0,5 ATR. Bordure ambrée : '
         'clôture à moins de 0,15 ATR d’un niveau valide. Un niveau déjà franchi depuis son dernier contact est ignoré.</div>'
@@ -175,7 +180,8 @@ def guide_html() -> str:
         'contraire sur un timeframe supérieur ; marché fermé ou données absentes.</div>'
         '<h4>8. Avant d’agir</h4>'
         '<div>Vérifiez le signal sur votre propre graphique, puis fixez votre risque et votre taille de position. '
-        'Testez la méthode en compte démo. Le fichier <b>journal/entrees.csv</b> enregistre chaque entrée affichée, pour la revérifier sur votre graphique.</div>'
+        'Testez la méthode en compte démo. Le fichier <b>journal/entrees.csv</b> garde la trace de chaque entrée affichée, '
+        'pour la revérifier sur votre graphique. C’est une mémoire de ce qui a été affiché, pas une preuve de performance.</div>'
         '</div>'
     )
 

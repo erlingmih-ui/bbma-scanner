@@ -116,17 +116,19 @@ def sr_levels(df, extra=(), k=PIVOT_K, tol_atr=TOL_ATR, near_atr=NEAR_ATR, break
     zones += [{"price": float(p), "touches": 1, "strength": 1.0, "last": int(i), "src": s}
               for p, s, i in extra]
 
-    valid, broken = [], 0
+    valid, broken_above, broken_below = [], [], []
     for z in zones:
         seg = closes[max(z["last"] + 1, 0):]                 # clôtures depuis le dernier contact
         if z["price"] > close:                               # résistance candidate : franchie vers le haut ?
             gone = seg.size > 0 and bool((seg > z["price"] + break_atr * a).any())
         else:                                                # support candidat : franchi vers le bas ?
             gone = seg.size > 0 and bool((seg < z["price"] - break_atr * a).any())
-        if gone:
-            broken += 1
-        else:
+        if not gone:
             valid.append(z)
+        elif z["price"] > close:
+            broken_above.append(z)
+        else:
+            broken_below.append(z)
 
     near = near_atr * a
     above = [z for z in valid if z["price"] > close + near]
@@ -140,7 +142,15 @@ def sr_levels(df, extra=(), k=PIVOT_K, tol_atr=TOL_ATR, near_atr=NEAR_ATR, break
         return {"atr": abs(z["price"] - close) / a, "touches": z["touches"], "src": z["src"],
                 "strength": round(z["strength"], 2)}
 
-    return {"res": nearest(above), "sup": nearest(below), "on_level": on, "atr": a, "casses": broken}
+    return {
+        "res": nearest(above),
+        "sup": nearest(below),
+        "res_franchi": nearest([z for z in broken_above if z["price"] > close + near]),   # affiché barré
+        "sup_franchi": nearest([z for z in broken_below if z["price"] < close - near]),
+        "on_level": on,
+        "atr": a,
+        "casses": len(broken_above) + len(broken_below),
+    }
 
 
 def levels_one(pair, tf, data):
@@ -200,8 +210,12 @@ def describe(levels):
                          f"({lvl['touches']} touche(s), force {_fr(lvl['strength'])}, {lvl['src']})")
         else:
             parts.append(f"{name} : aucun niveau valide")
+    for name, fr, word in (("Résistance", levels.get("res_franchi"), "au-dessus"),
+                           ("Support", levels.get("sup_franchi"), "en dessous")):
+        if fr:
+            parts.append(f"{name} {word} franchi à {_fr(fr['atr'])} ATR (affiché barré, ignoré comme obstacle)")
     if levels.get("casses"):
-        parts.append(f"{levels['casses']} niveau(x) déjà franchi(s) ignoré(s)")
+        parts.append(f"{levels['casses']} niveau(x) déjà franchi(s) au total")
     if levels["on_level"]:
         parts.append("clôture sur un niveau")
     return " · ".join(parts)
@@ -214,12 +228,17 @@ def short(levels):
     return f"Rés {up} · Sup {dn}"
 
 
-def _side_html(name, lvl, color):
-    """Une ligne « Rés 1,1 » ou « Sup 0,8 » ; en gras si le niveau est très proche."""
+def _side_html(name, lvl, color, franchi=None):
+    """Lignes d'un côté : niveau valide (en gras si très proche) ; niveau franchi barré en gris s'il est plus proche."""
+    lines = []
+    if franchi and (lvl is None or franchi["atr"] < lvl["atr"]):
+        lines.append(f'<div style="color:{GREY};text-decoration:line-through">{name} {_fr(franchi["atr"])}</div>')
     if not lvl:
-        return f'<div style="color:{GREY}">{name} –</div>'
-    weight = "700" if lvl["atr"] < NEAR_WARN_ATR else "400"
-    return f'<div style="color:{color};font-weight:{weight}">{name} {_fr(lvl["atr"])}</div>'
+        lines.append(f'<div style="color:{GREY}">{name} –</div>')
+    else:
+        weight = "700" if lvl["atr"] < NEAR_WARN_ATR else "400"
+        lines.append(f'<div style="color:{color};font-weight:{weight}">{name} {_fr(lvl["atr"])}</div>')
+    return "".join(lines)
 
 
 def _bar_html(levels):
@@ -246,6 +265,7 @@ def levels_cell(levels, error=None) -> str:
         return f'<td class="lvl none" title="{tip}">n/d</td>'
     tip = html.escape(describe(levels))
     ring = f";box-shadow:0 0 0 1px {AMBER}" if levels["on_level"] else ""
-    body = _side_html("Rés", levels["res"], RED) + _side_html("Sup", levels["sup"], GREEN)
+    body = (_side_html("Rés", levels["res"], RED, levels.get("res_franchi"))
+            + _side_html("Sup", levels["sup"], GREEN, levels.get("sup_franchi")))
     return (f'<td class="lvl" title="{tip}" style="font-size:0.8em;line-height:1.25{ring}">'
             f"{body}{_bar_html(levels)}</td>")
