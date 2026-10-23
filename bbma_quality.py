@@ -10,7 +10,6 @@ Corrections par rapport à la version précédente :
     réduisent la confiance, et un timeframe sans données est exclu au lieu de pénaliser.
 """
 import html
-import logging
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -18,12 +17,8 @@ import pandas as pd
 import bbma_core as core
 import bbma_fresh as bf
 import bbma_gauge as bg
-import bbma_levels as bl
-
 import bbma_patterns as bpat
 import bbma_session as bs
-
-log = logging.getLogger("bbma")
 from bbma_quality_codes import (
     ATR_PERIOD, CHASE_BELOW, CHASE_BELOW_MAX_ATR, CHASE_MISSING, CHASE_STEPS, CODE_WEIGHT,
     D1_AGREE, D1_DISAGREE, D1_UNKNOWN, GRADE_MIN, MAX_CONFLUENCE, MID_PERIOD,
@@ -63,13 +58,8 @@ def features_one(pair, tf, data):
         alive = bpat.alive_signal(df)            # signal de pattern encore en vie (colonne Pattern MTF)
     except Exception:
         alive = None
-    try:
-        levels = bl.levels_one(pair, tf, data)   # niveaux S/R (colonne Niveaux, informative)
-    except Exception:
-        log.exception("niveaux S/R indisponibles pour %s %s", pair, tf)   # visible dans le terminal
-        levels = None
     return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close,
-            "recent": recent, "recent_entry": recent_entry, "alive": alive, "levels": levels}
+            "recent": recent, "recent_entry": recent_entry, "alive": alive}
 
 
 def recent_entry_signal(df, lookback=core.RECENT_BARS):

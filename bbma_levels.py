@@ -1,33 +1,39 @@
-"""Niveaux de support et de résistance : colonne informative « Niveaux ».
+"""Niveaux de support et de résistance : colonne « Niveaux » du tableau.
 
-Intégration minimale : bbma_quality.features_one ajoute la clé « levels », et app.py affiche la
-colonne « Niveaux » (cellule de bbma_levels.levels_cell). Aucun grade, aucune synthèse et aucun
-score de qualité n'en dépend : la colonne sert à observer avant toute intégration au score.
+Module totalement isolé du moteur BBMA :
+  - il ne modifie aucun fichier existant et n'est appelé par aucun calcul de signal, de grade ou de score ;
+  - il fait son propre scan (scan_levels) et renvoie ses propres erreurs ;
+  - la colonne affiche, pour chaque paire, la résistance la plus proche au-dessus du prix et le support
+    le plus proche en dessous, sur un timeframe de référence fixe (LEVELS_TF), indépendamment des signaux.
 
-Sources de niveaux (calculées sur les bougies fermées uniquement) :
-  - pivots (swings) : un haut ou un bas local sur une fenêtre de k bougies de chaque côté.
-    Un pivot en i n'est retenu qu'à partir de la bougie i+k (pas de look-ahead) ;
+Sources de niveaux (bougies fermées uniquement) :
+  - pivots (swings) : un haut ou un bas local dépassant strictement k bougies de chaque côté.
+    Un pivot n'est retenu qu'après k bougies suivantes (pas de look-ahead) ;
   - PDH / PDL : plus haut et plus bas de la dernière journée D1 fermée (timeframes intraday).
 
-Les pivots proches (à moins de TOL_ATR × ATR de la moyenne du groupe) sont regroupés en zones.
-Le nombre de touches d'une zone sert de force. Un ancien haut peut redevenir support, donc
-les hauts et les bas sont regroupés ensemble.
-
-Toutes les distances sont exprimées en ATR, pour être comparables entre XAUUSD, BTCUSD et les paires FX.
+Les pivots proches (à moins de TOL_ATR × ATR de la moyenne de leur groupe) forment une zone ;
+le nombre de touches donne la force. Les hauts et les bas sont regroupés ensemble, car un ancien
+sommet peut redevenir support. Toutes les distances sont en multiples d'ATR.
 """
+import html
+import logging
+
 import numpy as np
 import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
+log = logging.getLogger("bbma")
+
+LEVELS_TF = "H1"         # timeframe affiché dans la colonne (indépendant des TF choisis pour les signaux)
 PIVOT_K = 3              # bougies de chaque côté pour valider un pivot
-TOL_ATR = 0.5            # distance maximale (en ATR) pour regrouper deux pivots dans une même zone
+TOL_ATR = 0.5            # distance maximale (en ATR) pour regrouper deux pivots dans une zone
 ATR_PERIOD = 14
-NEAR_ATR = 0.3           # clôture à moins de NEAR_ATR × ATR d'un niveau : « sur le niveau »
-PDH_TFS = ("M5", "M15", "H1", "H4")   # PDH / PDL utiles seulement sur les timeframes intraday
+NEAR_ATR = 0.3           # clôture à moins de NEAR_ATR × ATR d'une zone : « sur un niveau »
+PDH_TFS = ("M5", "M15", "H1", "H4")   # PDH / PDL seulement sur les timeframes intraday
 
 
 def _atr(df, n=ATR_PERIOD):
-    """Average True Range (moyenne simple sur n bougies), même formule que bbma_quality.atr."""
+    """Average True Range (moyenne simple sur n bougies)."""
     prev = df["Close"].shift(1)
     tr = pd.concat([df["High"] - df["Low"],
                     (df["High"] - prev).abs(),
@@ -36,51 +42,45 @@ def _atr(df, n=ATR_PERIOD):
 
 
 def confirmed_pivots(df, k=PIVOT_K):
-    """Prix des pivots (hauts et bas) confirmés dans df, dans l'ordre chronologique.
+    """Prix des pivots (hauts et bas) confirmés dans df, triés.
 
-    Un pivot au centre c est retenu seulement si c + k <= len(df) - 1 : il faut k bougies
-    après lui pour le confirmer. Ainsi, une bougie future ne peut jamais créer un pivot passé."""
-    n = len(df)
-    if n < 2 * k + 1:
+    Un pivot au centre c n'est retenu que si c + k <= len(df) - 1 : il faut k bougies après lui."""
+    if len(df) < 2 * k + 1:
         return []
     prices = []
     for col, sign in (("High", 1), ("Low", -1)):
-        x = sign * df[col].to_numpy(float)               # pour les bas : on cherche un maximum de -Low
-        win = sliding_window_view(x, 2 * k + 1)          # ligne j : fenêtre centrée sur j + k
+        x = sign * df[col].to_numpy(float)                 # pour les bas : on cherche un maximum de -Low
+        win = sliding_window_view(x, 2 * k + 1)            # ligne j : fenêtre centrée sur j + k
         centre = win[:, k]
-        # Pivot strict : la bougie centrale dépasse STRICTEMENT toutes ses voisines.
-        # Sans cette règle, un plateau (égalités) ferait de chaque bougie un pivot.
+        # Pivot strict : la bougie centrale dépasse STRICTEMENT ses voisines (évite les plateaux)
         others_max = np.maximum(win[:, :k].max(axis=1), win[:, k + 1:].max(axis=1))
-        is_pivot = centre > others_max
-        prices.extend((sign * centre[is_pivot]).tolist())
+        prices.extend((sign * centre[centre > others_max]).tolist())
     return sorted(prices)
 
 
 def _cluster(prices, tol):
-    """Regroupe des prix triés : un prix rejoint le groupe si il est à moins de tol de la moyenne du groupe.
+    """Regroupe des prix triés : un prix rejoint le groupe s'il est à moins de tol de la moyenne du groupe.
     Retourne une liste de {price, touches}."""
-    zones = []
-    group = []
+    groups, group = [], []
     for p in sorted(prices):
         if group and p - np.mean(group) > tol:
-            zones.append(group)
+            groups.append(group)
             group = []
         group.append(p)
     if group:
-        zones.append(group)
-    return [{"price": float(np.mean(g)), "touches": len(g)} for g in zones]
+        groups.append(group)
+    return [{"price": float(np.mean(g)), "touches": len(g)} for g in groups]
 
 
 def sr_levels(df, extra=(), k=PIVOT_K, tol_atr=TOL_ATR, near_atr=NEAR_ATR):
-    """Niveaux de support et de résistance proches de la dernière bougie fermée de df.
+    """Résistance et support les plus proches de la dernière bougie fermée de df.
 
-    extra : niveaux supplémentaires fournis par l'appelant, sous la forme (prix, source) ; ex. (PDH, "PDH").
-    Retourne None si l'ATR n'est pas calculable, sinon un dictionnaire :
-      res       : résistance la plus proche au-dessus du prix, {atr, touches, src} ou None
-      sup       : support le plus proche sous le prix, {atr, touches, src} ou None
-      on_level  : True si la clôture est à moins de near_atr × ATR d'une zone
-      atr       : valeur de l'ATR utilisée
-    Les distances « atr » sont des multiples de l'ATR, toujours positives."""
+    extra : niveaux fournis par l'appelant, sous la forme (prix, source), par exemple (PDH, "PDH").
+    Retourne None si l'ATR n'est pas calculable, sinon :
+      res      : {atr, touches, src} de la résistance la plus proche au-dessus du prix, ou None
+      sup      : {atr, touches, src} du support le plus proche sous le prix, ou None
+      on_level : True si la clôture est à moins de near_atr × ATR d'une zone
+      atr      : valeur de l'ATR utilisée"""
     if len(df) <= ATR_PERIOD:
         return None
     a = _atr(df).iloc[-1]
@@ -96,61 +96,20 @@ def sr_levels(df, extra=(), k=PIVOT_K, tol_atr=TOL_ATR, near_atr=NEAR_ATR):
     below = [z for z in zones if z["price"] < close - near]
     on = any(abs(z["price"] - close) <= near for z in zones)
 
-    def pick(cands, nearest):
+    def nearest(cands):
         if not cands:
             return None
-        z = nearest(cands, key=lambda x: abs(x["price"] - close))
+        z = min(cands, key=lambda x: abs(x["price"] - close))
         return {"atr": abs(z["price"] - close) / a, "touches": z["touches"], "src": z["src"]}
 
-    return {"res": pick(above, min), "sup": pick(below, min), "on_level": on, "atr": a}
-
-
-def room_atr(levels, sens):
-    """Espace avant le prix dans le sens du trade, en ATR.
-
-    Achat : distance à la résistance la plus proche (obstacle). Vente : distance au support le plus proche.
-    None si aucun niveau n'est connu dans ce sens, c'est-à-dire aucun obstacle identifié."""
-    if not levels or sens not in ("B", "S"):
-        return None
-    lvl = levels["res"] if sens == "B" else levels["sup"]
-    return lvl["atr"] if lvl else None
-
-
-def appui_atr(levels, sens):
-    """Niveau derrière le prix, dans le sens inverse du trade, en ATR (appui pour l'entrée).
-
-    Achat : support le plus proche sous le prix. Vente : résistance la plus proche au-dessus du prix."""
-    if not levels or sens not in ("B", "S"):
-        return None
-    lvl = levels["sup"] if sens == "B" else levels["res"]
-    return lvl["atr"] if lvl else None
-
-
-def _fr(x):
-    """Nombre à une décimale, séparateur français."""
-    return f"{x:.1f}".replace(".", ",")
-
-
-def label(levels, sens):
-    """Texte court pour la cellule « Niveaux » et son infobulle. « – » si pas de niveaux ou pas de sens."""
-    if not levels or sens not in ("B", "S"):
-        return "–"
-    parts = []
-    ob = room_atr(levels, sens)
-    parts.append("aucun obstacle connu" if ob is None else f"obstacle à {_fr(ob)} ATR")
-    ap = appui_atr(levels, sens)
-    if ap is not None:
-        parts.append(f"appui à {_fr(ap)} ATR")
-    if levels["on_level"]:
-        parts.append("sur un niveau")
-    return " · ".join(parts)
+    return {"res": nearest(above), "sup": nearest(below), "on_level": on, "atr": a}
 
 
 def levels_one(pair, tf, data):
-    """Niveaux d'un couple (paire, TF) à partir des données téléchargées (bbma_core._fetch_all).
+    """Niveaux d'un couple (paire, TF) à partir des bougies téléchargées.
 
-    Importe bbma_session à l'intérieur de la fonction : le reste du module reste utilisable
-    sans yfinance (tests, outils hors application). Retourne None si indisponible."""
+    bbma_session est importé ici pour que le reste du module reste utilisable sans yfinance.
+    Retourne None si les données sont indisponibles."""
     import bbma_session as bs
     df = bs.closed_bars(pair, tf, data)
     if df is None:
@@ -159,19 +118,62 @@ def levels_one(pair, tf, data):
     if tf in PDH_TFS:
         d1 = bs.closed_bars(pair, "D1", data)
         if d1 is not None and len(d1):
-            day = d1.iloc[-1]                     # dernière journée D1 fermée = jour précédent
+            day = d1.iloc[-1]                  # dernière journée D1 fermée = jour précédent
             extra = ((float(day["High"]), "PDH"), (float(day["Low"]), "PDL"))
     return sr_levels(df, extra=extra)
 
 
-def levels_cell(levels, sens) -> str:
-    """Cellule « Niveaux » : obstacle devant le prix dans le sens du trade, détail au survol."""
-    import html
-    if sens not in ("B", "S"):
-        return '<td class="lvl none">–</td>'            # pas d'entrée : rien à afficher
+def scan_levels(pairs, tfs=(LEVELS_TF,)):
+    """Niveaux S/R pour les paires et timeframes demandés, avec son propre téléchargement.
+
+    Indépendant de run_scan : une erreur ici n'affecte aucune autre colonne.
+    Retourne {(paire, tf): (niveaux ou None, message d'erreur ou None)}."""
+    import bbma_core as core
+    pairs, tfs = list(pairs), list(tfs)
+    fetch_tfs = list(dict.fromkeys(tfs + ["D1"]))          # D1 nécessaire pour PDH / PDL
+    data = core._fetch_all(pairs, fetch_tfs, trend=False)
+    out = {}
+    for p in pairs:
+        for t in tfs:
+            try:
+                lv = levels_one(p, t, data)
+                out[(p, t)] = (lv, None if lv else "données indisponibles")
+            except Exception as e:
+                log.exception("niveaux S/R %s %s", p, t)
+                out[(p, t)] = (None, f"{type(e).__name__} : {e}")
+    return out
+
+
+def _fr(x):
+    """Nombre à une décimale, séparateur français."""
+    return f"{x:.1f}".replace(".", ",")
+
+
+def describe(levels):
+    """Texte détaillé (infobulle) décrivant les niveaux."""
     if not levels:
-        return '<td class="lvl none" title="Niveaux non calculables (voir le terminal)">n/d</td>'
-    ob = room_atr(levels, sens)
-    short = "libre" if ob is None else f"{_fr(ob)} ATR"
-    tip = html.escape(label(levels, sens))
-    return f'<td class="lvl" title="{tip}">{short}</td>'
+        return "Niveaux non calculables"
+    parts = []
+    for name, lvl, word in (("Résistance", levels["res"], "au-dessus"), ("Support", levels["sup"], "en dessous")):
+        if lvl:
+            parts.append(f"{name} {word} à {_fr(lvl['atr'])} ATR ({lvl['touches']} touche(s), {lvl['src']})")
+        else:
+            parts.append(f"{name} : aucun niveau connu")
+    if levels["on_level"]:
+        parts.append("clôture sur un niveau")
+    return " · ".join(parts)
+
+
+def short(levels):
+    """Texte court de la cellule : ▲ distance résistance · ▼ distance support, en ATR."""
+    up = "–" if not levels or not levels["res"] else _fr(levels["res"]["atr"])
+    dn = "–" if not levels or not levels["sup"] else _fr(levels["sup"]["atr"])
+    return f"▲ {up} · ▼ {dn}"
+
+
+def levels_cell(levels, error=None) -> str:
+    """Cellule « Niveaux » pour un couple (paire, LEVELS_TF). L'erreur est donnée en infobulle."""
+    if not levels:
+        tip = html.escape(error or "Niveaux non calculables (voir le terminal)")
+        return f'<td class="lvl none" title="{tip}">n/d</td>'
+    return f'<td class="lvl" title="{html.escape(describe(levels))}">{short(levels)}</td>'
