@@ -1,5 +1,5 @@
 --- /mnt/user-data/uploads/app.py	2026-10-22 18:30:17.496927000 +0000
-+++ app.py	2026-10-23 19:51:55.546207857 +0000
++++ app.py	2026-10-23 20:07:33.556188083 +0000
 @@ -21,6 +21,7 @@
  import bbma_patterns as bpat   # colonne « Pattern MTF » (lettres R / E / M / C / O)
  import bbma_pairs as bp
@@ -8,7 +8,30 @@
  from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
  
  logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
-@@ -250,6 +251,12 @@
+@@ -158,10 +159,20 @@
+         '<div><b>Confiance</b> ≥ 70 % : la plupart des timeframes vont dans le même sens. <b>Jauge</b> : sa couleur '
+         'doit rester du côté de l’entrée. <b>RSI</b> sous chaque cellule : il pèse dans le score Qualité ; un RSI '
+         'extrême dans le sens du trade le réduit.</div>'
+-        '<h4>6. Quand renoncer ?</h4>'
++        '<h4>6. Où sont les niveaux ? (colonne Niveaux)</h4>'
++        '<div>Colonne informative, calculée sur le H1 quel que soit le timeframe choisi. '
++        '<span class="chip sell">Rés x,x</span> : résistance au-dessus du prix, à x,x fois l’ATR (volatilité récente). '
++        '<span class="chip buy">Sup x,x</span> : support en dessous du prix.</div>'
++        '<div>La <b>barre</b> montre la place disponible : verte sous le prix, rouge au-dessus. Une partie fine '
++        'signifie un niveau proche. Chiffre en <b>gras</b> : niveau à moins de 0,5 ATR. Bordure ambrée : '
++        'clôture sur un niveau.</div>'
++        '<div>Pour un <b>achat</b>, une résistance proche est un obstacle et un support proche un appui. '
++        'Pour une <b>vente</b>, c’est l’inverse. Les niveaux n’entrent pas dans le score : ils aident à juger, '
++        'ils ne décident pas.</div>'
++        '<h4>7. Quand renoncer ?</h4>'
+         '<div>Pastille de fraîcheur <b>en retard</b> ou <b>périmée</b> ; filtre D1 contraire ; grade C ; signal '
+         'contraire sur un timeframe supérieur ; marché fermé ou données absentes.</div>'
+-        '<h4>7. Avant d’agir</h4>'
++        '<h4>8. Avant d’agir</h4>'
+         '<div>Vérifiez le signal sur votre propre graphique, puis fixez votre risque et votre taille de position. '
+         'Testez la méthode en compte démo. Le module <b>bbma_backtest.py</b> permet de mesurer les grades sur '
+         'l’historique.</div>'
+@@ -250,6 +261,12 @@
      return bst.fetch_strength(pairs)
  
  
@@ -21,7 +44,7 @@
  def rsi_html(value) -> str:
      """Valeur RSI sous la cellule : couleur uniquement pour les extrêmes."""
      if value is None:
-@@ -371,7 +378,7 @@
+@@ -371,7 +388,7 @@
  
  
  def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None,
@@ -30,7 +53,7 @@
      """Tableau : Pair, timeframes, Pattern MTF (facultatif), Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
      Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
      nuc = nuc or {}
-@@ -402,8 +409,10 @@
+@@ -402,8 +419,10 @@
              pat_recent = {t: (feats.get((p, t)) or {}).get("recent") for t in tfs} if show_recent else None
          pat_td = [bpat.pattern_cell(bpat.detect_pattern(
              cells, tfs, avail, preferred=bpat.MODES.get(pat_mode, bpat.PATTERN_TFS), recent=pat_recent))] if patterns else []
@@ -42,7 +65,7 @@
          fr_status, fr_tip = bf.pair_status(p, feats, tfs)
          row = f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>'
          force, nscore = bn.sort_key(n)
-@@ -416,7 +425,7 @@
+@@ -416,7 +435,7 @@
              + "".join(f"<th>{t}</th>" for t in tfs)
              + ('<th class="s5 hmtf">Pattern MTF</th>' if patterns else '')
              + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th>'
@@ -51,7 +74,7 @@
      return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
  
  
-@@ -509,6 +518,7 @@
+@@ -509,6 +528,7 @@
              res, trends, failed, total, ts, feats, nuc = run_scan(
                  tuple(pairs), tuple(tfs), SCAN_VERSION, st.session_state.get("refresh_nonce", 0))
              strength = run_strength(tuple(pairs), st.session_state.get("refresh_nonce", 0))
@@ -59,7 +82,7 @@
  
          if failed:
              st.warning(
-@@ -518,7 +528,7 @@
+@@ -518,7 +538,7 @@
  
          table_css = bpat.with_css(CSS, fit_screen)   # un seul bloc <style> (CommonMark)
          st.markdown(table_css + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength,
