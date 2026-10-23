@@ -21,6 +21,7 @@ import bbma_nuclear as bn
 import bbma_patterns as bpat   # colonne « Pattern MTF » (lettres R / E / M / C / O)
 import bbma_pairs as bp
 import bbma_quality as bq
+import bbma_levels as bl
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
@@ -29,7 +30,7 @@ APP_TITLE = "BBMA OA MTF Scanner"
 DEFAULT_PAIRS = "EURUSD GBPUSD USDJPY AUDUSD USDCAD USDCHF NZDUSD EURJPY GBPJPY EURGBP XAUUSD BTCUSD"
 MAX_PAIRS = 12
 CACHE_TTL = 240          # secondes ; inférieur à AUTO_REFRESH pour qu'un vrai scan ait lieu à chaque cycle
-SCAN_VERSION = 7         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
+SCAN_VERSION = 8         # à incrémenter quand la structure de feats (bbma_quality) change : invalide le cache
 AUTO_REFRESH = 300       # secondes entre deux scans automatiques
 RSI_LOW, RSI_HIGH = 30, 70   # repères visuels uniquement (couleur), aucun effet sur les signaux
 
@@ -403,7 +404,8 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
         pat_td = [bpat.pattern_cell(bpat.detect_pattern(
             cells, tfs, avail, preferred=bpat.MODES.get(pat_mode, bpat.PATTERN_TFS), recent=pat_recent))] if patterns else []
         tds = tf_tds + pat_td + [synth_cell(tf_e, code_e, sens_e, kind, ghost), conf_cell(score),
-                        gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail)]
+                        gauge_cell(gauge), bn.nuc_cell(n), bq.qual_cell(q_score, q_grade, q_detail),
+                        bl.levels_cell((feats.get((p, tf_e)) or {}).get("levels"), sens_e)]
         fr_status, fr_tip = bf.pair_status(p, feats, tfs)
         row = f'<tr><th class="pair">{html.escape(p)}{bf.dot_html(fr_status, fr_tip)}</th>{"".join(tds)}</tr>'
         force, nscore = bn.sort_key(n)
@@ -416,7 +418,8 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
             + "".join(f"<th>{t}</th>" for t in tfs)
             + ('<th class="s5 hmtf">Pattern MTF</th>' if patterns else '')
             + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th>'
-            + '<th class="s4 hmtf">Jauge</th><th class="s4 hmtf">Nuclear</th><th class="s3 hmtf">Qualité</th></tr>')
+            + '<th class="s4 hmtf">Jauge</th><th class="s4 hmtf">Nuclear</th><th class="s3 hmtf">Qualité</th>'
+            + '<th class="hmtf">Niveaux</th></tr>')
     return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
 
 

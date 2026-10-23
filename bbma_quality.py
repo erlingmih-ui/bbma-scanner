@@ -17,6 +17,7 @@ import pandas as pd
 import bbma_core as core
 import bbma_fresh as bf
 import bbma_gauge as bg
+import bbma_levels as bl
 import bbma_patterns as bpat
 import bbma_session as bs
 from bbma_quality_codes import (
@@ -58,8 +59,12 @@ def features_one(pair, tf, data):
         alive = bpat.alive_signal(df)            # signal de pattern encore en vie (colonne Pattern MTF)
     except Exception:
         alive = None
+    try:
+        levels = bl.levels_one(pair, tf, data)   # niveaux S/R (colonne Niveaux, informative)
+    except Exception:
+        levels = None
     return {"rsi": None if pd.isna(r) else float(r), "dist_atr": dist, "last_close": last_close,
-            "recent": recent, "recent_entry": recent_entry, "alive": alive}
+            "recent": recent, "recent_entry": recent_entry, "alive": alive, "levels": levels}
 
 
 def recent_entry_signal(df, lookback=core.RECENT_BARS):
