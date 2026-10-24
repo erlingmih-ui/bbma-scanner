@@ -494,6 +494,12 @@ def make_chart(df, pair, tf):
             if lv.get(key):
                 fig.add_hline(y=lv[key]["price"], line=dict(color=color, dash="dash", width=1),
                               annotation_text=f"{label} {lv[key]['atr']:.1f} ATR", annotation_position="right")
+        # Niveaux déjà franchis depuis leur dernier contact : affichés en grisé, ignorés comme obstacle
+        for key, label in (("res_franchi", "Rés franchi"), ("sup_franchi", "Sup franchi")):
+            if lv.get(key):
+                fig.add_hline(y=lv[key]["price"], line=dict(color="#787b86", dash="dot", width=1),
+                              annotation_text=f"{label} {lv[key]['atr']:.1f} ATR", annotation_position="right",
+                              annotation_font_color="#787b86")
     fig.update_layout(title=f"{pair} · {tf}", template="plotly_dark", paper_bgcolor="#1e222d",
                       plot_bgcolor="#1e222d", height=520, xaxis_rangeslider_visible=False,
                       margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.08))
