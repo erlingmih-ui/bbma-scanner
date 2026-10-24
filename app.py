@@ -12,6 +12,11 @@ import logging
 
 import streamlit as st
 
+try:                                  # graphique par paire : plotly (voir requirements.txt)
+    import plotly.graph_objects as go
+except ImportError:
+    go = None
+
 import bbma_core as core
 import bbma_fresh as bf
 import bbma_session as bs
@@ -400,8 +405,104 @@ def gauge_cell(g) -> str:
             f'<span class="gb{b_dom}">B {buy_pct}%</span></div></td>')
 
 
+OPP_MIN_GRADES = ("A", "B")          # grades affichés dans la vue Opportunités
+OPP_CSS = """<style>
+.opp-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#787b86;margin:6px 0 8px}
+.opp-wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin:0 0 14px}
+.opp{background:#1e222d;border:1px solid #2a2e39;border-left:3px solid #26a69a;border-radius:10px;padding:10px 12px;font:13px/1.45 -apple-system,"Trebuchet MS",Roboto,sans-serif;color:#b2b5be}
+.opp.sell{border-left-color:#ef5350}
+.opp b{color:#d1d4dc}
+.opp .g{float:right;font-weight:700;color:#d1d4dc}
+.opp .s{font-size:12px;color:#787b86;margin-top:3px}
+.opp .s.at{color:#f0b90b;font-weight:700}
+.opp-s{font-size:13px;color:#787b86}
+</style>"""
+
+
+def opportunities_html(pairs, tfs, res, trends, feats, use_filter, ent) -> str:
+    """Vue Opportunités : paires ayant une entrée BBMA de grade A ou B, avec le setup par style
+    (entrée, stop, cible) quand son sens correspond à l'entrée. Même calcul que build_table, sans son affichage."""
+    items = []
+    for p in pairs:
+        cells = {t: res[(p, t)] for t in tfs}
+        d1 = trends.get(p)
+        tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, d1)
+        if not tf_e:
+            continue
+        avail = [t for t in tfs if feats.get((p, t)) is not None]
+        conf = bq.confiance_ponderee(cells, tfs, sens_e, avail)
+        q_score, q_grade, _ = bq.qualite_entree(code_e, sens_e, conf, d1, feats.get((p, tf_e)))
+        kind = bs.entry_kind(cells, tfs, tf_e, code_e)
+        q_score, q_grade = bs.cap_grade(q_score, q_grade, kind)
+        if q_grade not in OPP_MIN_GRADES:
+            continue
+        setups = ((ent or {}).get(p) or ({},))[0]
+        want = "BUY" if sens_e == "B" else "SELL"
+        lines = []
+        for style in bse.TFS_BY_STYLE:
+            s = setups.get(style) or {}
+            if s.get("bias") != want:
+                continue
+            at = s.get("status") == "at_entry"
+            lines.append(
+                f'<div class="s{" at" if at else ""}">{bse.SHORT[style]} : entrée {bse.fmt(s["entry"])} · '
+                f'stop {bse.fmt(s["stop"])} · cible {bse.fmt(s["target"])} · écart {abs(s["dist_pct"]):.2f} %'
+                + (" · à l’entrée" if at else "") + "</div>")
+        items.append((q_grade == "A", q_score or 0, p, tf_e, code_e, sens_e, kind, q_grade, "".join(lines)))
+
+    head = '<div class="opp-h">Opportunités · grade A ou B</div>'
+    if not items:
+        return OPP_CSS + head + '<div class="opp-s">Aucune entrée de grade A ou B pour le moment.</div>'
+    items.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    cards = []
+    for _, score, p, tf_e, code_e, sens_e, kind, grade, lines in items:
+        side = "Achat ▲" if sens_e == "B" else "Vente ▼"
+        cls = "" if sens_e == "B" else " sell"
+        label = {"pullback": "pullback", "poursuite": "poursuite"}.get(kind, "")
+        tag = f" · {label}" if label else ""
+        cards.append(f'<div class="opp{cls}"><span class="g">{grade} {score}</span>'
+                     f'<b>{html.escape(p)}</b> · {side}'
+                     f'<div class="s">{tf_e} {code_e}{tag}</div>{lines}</div>')
+    return OPP_CSS + head + '<div class="opp-wrap">' + "".join(cards) + "</div>"
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def run_chart(pair, tf, nonce=0):
+    """Bougies fermées d'une paire pour le graphique ; nonce = bouton Rafraîchir."""
+    data = core._fetch_all([pair], [tf], False)
+    return bs.closed_bars(pair, tf, data)
+
+
+def make_chart(df, pair, tf):
+    """Chandeliers, Bandes de Bollinger (20, 2), MID BB, EMA50 et niveaux S/R du timeframe affiché."""
+    c = df["Close"]
+    mid = c.rolling(20).mean()
+    sd = c.rolling(20).std(ddof=0)
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=c,
+                                 name=pair, increasing_line_color="#26a69a", decreasing_line_color="#ef5350"))
+    for series, name, color, dash in (
+            (mid + 2 * sd, "BB haute", "#2962ff", "solid"),
+            (mid - 2 * sd, "BB basse", "#2962ff", "solid"),
+            (mid, "MID BB", "#787b86", "dot"),
+            (c.ewm(span=50, adjust=False).mean(), "EMA50", "#f0b90b", "solid")):
+        fig.add_trace(go.Scatter(x=df.index, y=series, name=name, mode="lines",
+                                 line=dict(color=color, width=1, dash=dash)))
+    lv = bl.sr_levels(df)
+    if lv:
+        for key, label, color in (("res", "Rés", "#ef5350"), ("sup", "Sup", "#26a69a")):
+            if lv.get(key):
+                fig.add_hline(y=lv[key]["price"], line=dict(color=color, dash="dash", width=1),
+                              annotation_text=f"{label} {lv[key]['atr']:.1f} ATR", annotation_position="right")
+    fig.update_layout(title=f"{pair} · {tf}", template="plotly_dark", paper_bgcolor="#1e222d",
+                      plot_bgcolor="#1e222d", height=520, xaxis_rangeslider_visible=False,
+                      margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.08))
+    return fig
+
+
 def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, nuc=None, strength=None,
-                patterns=True, pat_mode=bpat.DEFAULT_MODE, pat_alive=True, lvl=None, ent=None) -> str:
+                patterns=True, pat_mode=bpat.DEFAULT_MODE, pat_alive=True, lvl=None, ent=None,
+                only_entries=False) -> str:
     """Tableau : Pair, timeframes, Pattern MTF (facultatif), Entrée BBMA, Confiance, Jauge, Nuclear, Qualité.
     Lignes triées : Force Nuclear, score Nuclear, Qualité BBMA, Confiance (décroissant)."""
     nuc = nuc or {}
@@ -417,6 +518,8 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
             tf_tds.append(cell_html(code, direction, rsi_v, recent))
         d1 = trends.get(p)
         tf_e, code_e, sens_e = core.synthese(cells, tfs, use_filter, d1)
+        if only_entries and not tf_e:          # filtre : ne garder que les paires ayant une entrée
+            continue
         avail = [t for t in tfs if feats.get((p, t)) is not None]   # TF sans données exclus
         score = bq.confiance_ponderee(cells, tfs, sens_e, avail)
         gauge = strength.get(p)                       # force générale locale (None : « – »)
@@ -535,6 +638,8 @@ def main():
             st.sidebar.caption(f"Cochez aussi {', '.join(absent)} dans « Timeframes » pour lire ce mode en entier.")
     fit_screen = st.sidebar.checkbox("Ajuster le tableau à l’écran", True,
                                      help="Réduit les marges et la taille du texte pour que tout le tableau tienne sans défilement.")
+    only_entries = st.sidebar.checkbox("Masquer les paires sans entrée", False,
+                                       help="Ne garde dans le tableau que les paires ayant une entrée BBMA sur la dernière bougie.")
     if not pairs or not tfs:
         st.info("Choisis au moins une paire et un timeframe dans la barre latérale.")
         st.stop()
@@ -558,10 +663,30 @@ def main():
                 "Clique sur Rafraîchir dans quelques instants."
             )
 
+        st.markdown(opportunities_html(pairs, tfs, res, trends, feats, use_filter, ent_now), unsafe_allow_html=True)
         table_css = bpat.with_css(CSS, fit_screen)   # un seul bloc <style> (CommonMark)
         st.markdown(table_css + build_table(pairs, tfs, res, trends, feats, use_filter, show_recent, nuc, strength,
-                                            patterns=show_pattern, pat_mode=pat_mode, pat_alive=pat_alive, lvl=lvl_now, ent=ent_now),
+                                            patterns=show_pattern, pat_mode=pat_mode, pat_alive=pat_alive, lvl=lvl_now, ent=ent_now,
+                                            only_entries=only_entries),
                     unsafe_allow_html=True)
+        if go is None:
+            st.caption("Graphique indisponible : installez plotly (pip install plotly dans le dossier .venv).")
+        elif pairs and tfs:
+            st.subheader("Graphique")
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                chart_pair = st.selectbox("Paire", pairs, key="chart_pair")
+            with c2:
+                chart_tf = st.selectbox("Timeframe", tfs, key="chart_tf")
+            try:
+                cdf = run_chart(chart_pair, chart_tf, st.session_state.get("refresh_nonce", 0))
+                if cdf is None or cdf.empty:
+                    st.info("Données indisponibles pour ce graphique.")
+                else:
+                    st.plotly_chart(make_chart(cdf, chart_pair, chart_tf))
+            except Exception:
+                logging.getLogger("bbma").exception("graphique %s %s", chart_pair, chart_tf)
+                st.info("Graphique impossible à afficher pour cette paire (voir le terminal).")
         legend_open = st.session_state.get("show_legend", False)
         st.button("Masquer la légende" if legend_open else "Afficher la légende",
                   key="btn_legend", on_click=_toggle_legend)
