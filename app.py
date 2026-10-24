@@ -473,36 +473,64 @@ def run_chart(pair, tf, nonce=0):
     return bs.closed_bars(pair, tf, data)
 
 
-def make_chart(df, pair, tf):
-    """Chandeliers, Bandes de Bollinger (20, 2), MID BB, EMA50 et niveaux S/R du timeframe affiché."""
+def _level_line(fig, price, text, color, dash, width=1.2):
+    """Ligne horizontale pleine largeur, libellée à droite (dans la marge réservée)."""
+    fig.add_hline(y=price, line=dict(color=color, dash=dash, width=width))
+    fig.add_annotation(x=1, xref="paper", y=price, yref="y", text=text, showarrow=False,
+                       xanchor="left", yanchor="middle", font=dict(color=color, size=11))
+
+
+def make_chart(df, pair, tf, bars=150):
+    """Chandeliers, Bandes de Bollinger (20, 2), MID BB, EMA50 et niveaux S/R du timeframe affiché.
+    Vue par défaut : les `bars` dernières bougies, échelle calée sur elles (les niveaux restent visibles).
+    Le zoom et le défilement permettent de voir tout l'historique."""
     c = df["Close"]
     mid = c.rolling(20).mean()
     sd = c.rolling(20).std(ddof=0)
+    win = df.iloc[-bars:]
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=c,
-                                 name=pair, increasing_line_color="#26a69a", decreasing_line_color="#ef5350"))
-    for series, name, color, dash in (
-            (mid + 2 * sd, "BB haute", "#2962ff", "solid"),
-            (mid - 2 * sd, "BB basse", "#2962ff", "solid"),
-            (mid, "MID BB", "#787b86", "dot"),
-            (c.ewm(span=50, adjust=False).mean(), "EMA50", "#f0b90b", "solid")):
+                                 name=pair, increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+                                 increasing_fillcolor="#26a69a", decreasing_fillcolor="#ef5350"))
+    for series, name, color, dash, width in (
+            (mid + 2 * sd, "BB haute", "rgba(66,133,244,0.9)", "solid", 1),
+            (mid - 2 * sd, "BB basse", "rgba(66,133,244,0.9)", "solid", 1),
+            (mid, "MID BB", "#9aa0ac", "dot", 1),
+            (c.ewm(span=50, adjust=False).mean(), "EMA50", "#f0b90b", "solid", 1.5)):
         fig.add_trace(go.Scatter(x=df.index, y=series, name=name, mode="lines",
-                                 line=dict(color=color, width=1, dash=dash)))
+                                 line=dict(color=color, width=width, dash=dash)))
+
+    prices = []
     lv = bl.sr_levels(df)
     if lv:
-        for key, label, color in (("res", "Rés", "#ef5350"), ("sup", "Sup", "#26a69a")):
+        for key, label, color in (("res", "Rés", "#ff6b6b"), ("sup", "Sup", "#2ec4b6")):
             if lv.get(key):
-                fig.add_hline(y=lv[key]["price"], line=dict(color=color, dash="dash", width=1),
-                              annotation_text=f"{label} {lv[key]['atr']:.1f} ATR", annotation_position="right")
+                _level_line(fig, lv[key]["price"], f"{label} {lv[key]['atr']:.1f} ATR", color, "dash", 1.5)
+                prices.append(lv[key]["price"])
         # Niveaux déjà franchis depuis leur dernier contact : affichés en grisé, ignorés comme obstacle
         for key, label in (("res_franchi", "Rés franchi"), ("sup_franchi", "Sup franchi")):
             if lv.get(key):
-                fig.add_hline(y=lv[key]["price"], line=dict(color="#787b86", dash="dot", width=1),
-                              annotation_text=f"{label} {lv[key]['atr']:.1f} ATR", annotation_position="right",
-                              annotation_font_color="#787b86")
-    fig.update_layout(title=f"{pair} · {tf}", template="plotly_dark", paper_bgcolor="#1e222d",
-                      plot_bgcolor="#1e222d", height=520, xaxis_rangeslider_visible=False,
-                      margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.08))
+                _level_line(fig, lv[key]["price"], f"{label} {lv[key]['atr']:.1f} ATR", "#8a8f9c", "dot", 1)
+                prices.append(lv[key]["price"])
+
+    fig.update_layout(
+        title=dict(text=f"{pair} · {tf}", x=0.01, xanchor="left", font=dict(size=15, color="#d1d4dc")),
+        template="plotly_dark", paper_bgcolor="#1e222d", plot_bgcolor="#1e222d",
+        font=dict(color="#b2b5be", size=12), height=560, xaxis_rangeslider_visible=False,
+        hovermode="x unified", margin=dict(l=10, r=120, t=80, b=10),
+        legend=dict(orientation="h", x=0.01, xanchor="left", y=1.02, yanchor="bottom",
+                    font=dict(color="#d1d4dc", size=11), bgcolor="rgba(0,0,0,0)"),
+    )
+    fig.update_xaxes(gridcolor="#2a2e39", zeroline=False)
+    fig.update_yaxes(gridcolor="#2a2e39", zeroline=False)
+    if pair not in bf.CONTINUOUS:                  # forex / or : pas de bougies le week-end
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    if len(win):
+        lo, hi = float(win["Low"].min()), float(win["High"].max())
+        lo, hi = min([lo] + prices), max([hi] + prices)   # les niveaux restent visibles
+        pad = (hi - lo) * 0.08 or hi * 0.001
+        fig.update_yaxes(range=[lo - pad, hi + pad])
+        fig.update_xaxes(range=[win.index[0], df.index[-1]])
     return fig
 
 
