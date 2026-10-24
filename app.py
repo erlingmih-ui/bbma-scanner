@@ -15,7 +15,6 @@ import streamlit as st
 import bbma_core as core
 import bbma_fresh as bf
 import bbma_session as bs
-import bbma_gauge as bg
 import bbma_techgauge as bst   # jauge locale gratuite (remplace bbma_strength / TradingView)
 import bbma_nuclear as bn
 import bbma_patterns as bpat   # colonne « Pattern MTF » (lettres R / E / M / C / O)
@@ -24,6 +23,7 @@ import bbma_quality as bq
 import bbma_levels as bl   # niveaux S/R : conservés pour le journal (bbma_journal)
 import bbma_style_entry as bse   # colonne Entrée : logique du script Analysis_entry_distance
 import bbma_journal as bj  # journal de test en avant (CSV), sans effet sur le tableau
+import bbma_welcome as welcome  # page d'accueil et acceptation de l'avertissement (une fois par session)
 from bbma_quality_codes import GRADE_MIN, MAX_CHASE, MAX_CONFLUENCE, MAX_D1, MAX_RSI, MAX_SIGNAL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
@@ -104,6 +104,10 @@ def legend_html(show_recent=False, pat_mode=bpat.DEFAULT_MODE) -> str:
         '<div class="chips"><span class="chip buy">● à jour</span><span class="chip mid">● en retard</span>'
         '<span class="chip sell">● périmé</span></div>'
         '<div class="note">Pastille à côté de chaque paire : âge de la dernière bougie fermée, le pire timeframe compte. Détail au survol.</div>'
+        '<h4>Style (Scal / Swing)</h4>'
+        '<div class="note">Calculée selon le script Analysis_entry_distance. Scal : M15 et H1 ; Swing : H4 et D1. '
+        'Biais Achat ou Vente quand les deux timeframes ont la même tendance, avec le prix d’entrée et l’écart en % '
+        'au prix actuel. En gras : prix à l’entrée. Détail complet au survol.</div>'
         '<h4>Entrée BBMA</h4>'
         '<div class="chips"><span class="chip buy">pullback</span><span class="chip mid">poursuite</span></div>'
         '<div class="note">Pullback : retour vers la zone MA, avec un signal d’entrée sur un TF inférieur. Poursuite : le TF directeur sert d’entrée, prix déjà étendu, grade plafonné à B. H4 ancré sur : ' + bs.H4_SESSION + '.</div>'
@@ -140,7 +144,7 @@ def guide_html() -> str:
         '<div class="bb-legend">'
         '<h4>Guide de décision (informatif, pas un conseil)</h4>'
         '<div>Ce guide résume comment lire le tableau avant de décider un achat ou une vente. '
-        'Le scanner ne fixe ni point d’entrée, ni stop, ni objectif : la décision et le risque restent les vôtres.</div>'
+        'Les prix affichés sont indicatifs ; le scanner ne fixe ni stop ni objectif : la décision et le risque restent les vôtres.</div>'
         '<h4>1. Y a-t-il une entrée ?</h4>'
         '<div>La colonne <b>Entrée BBMA</b> est remplie : une entrée est détectée. Un « – » signifie qu’il n’y a '
         'aucune décision à prendre sur cette paire.</div>'
@@ -161,21 +165,10 @@ def guide_html() -> str:
         '<div><b>Confiance</b> ≥ 70 % : la plupart des timeframes vont dans le même sens. <b>Jauge</b> : sa couleur '
         'doit rester du côté de l’entrée. <b>RSI</b> sous chaque cellule : il pèse dans le score Qualité ; un RSI '
         'extrême dans le sens du trade le réduit.</div>'
-        '<h4>6. Où sont les niveaux ? (colonne Niveaux)</h4>'
-        '<div>Colonne informative, calculée sur le H1 quel que soit le timeframe choisi. '
-        '<span class="chip sell">Rés x,x</span> : résistance au-dessus du prix, à x,x fois l’ATR (volatilité récente). '
-        '<span class="chip buy">Sup x,x</span> : support en dessous du prix. Pour un <b>achat</b>, la résistance est '
-        'l’obstacle et le support l’appui ; pour une <b>vente</b>, l’inverse.</div>'
-        '<div>Ligne <b>barrée grise</b> : niveau déjà franchi depuis son dernier contact. Il est affiché pour '
-        'mémoire et n’est pas compté comme obstacle.</div>'
-        '<div><b>Réglages non validés</b> : pivots confirmés sur 3 bougies, regroupement à 0,5 ATR, franchissement '
-        'à 0,3 ATR. Ce sont des choix de départ, pas des valeurs démontrées.</div>'
-        '<div>La <b>barre</b> montre la place disponible : verte sous le prix, rouge au-dessus. Une partie fine '
-        'signifie un niveau proche. Chiffre en <b>gras</b> : niveau à moins de 0,5 ATR. Bordure ambrée : '
-        'clôture à moins de 0,15 ATR d’un niveau valide. Un niveau déjà franchi depuis son dernier contact est ignoré.</div>'
-        '<div>Pour un <b>achat</b>, une résistance proche est un obstacle et un support proche un appui. '
-        'Pour une <b>vente</b>, c’est l’inverse. Les niveaux n’entrent pas dans le score : ils aident à juger, '
-        'ils ne décident pas.</div>'
+        '<h4>6. Quel écart au prix ? (colonne Style)</h4>'
+        '<div>Colonne Style : pour Scal (M15 et H1) et Swing (H4 et D1), biais, prix d’entrée indicatif et écart en % '
+        'au prix actuel. En gras : le prix est déjà à l’entrée. Ces valeurs suivent la logique du script '
+        'Analysis_entry_distance. Elles n’entrent pas dans le score : elles aident à juger, elles ne décident pas.</div>'
         '<h4>7. Quand renoncer ?</h4>'
         '<div>Pastille de fraîcheur <b>en retard</b> ou <b>périmée</b> ; filtre D1 contraire ; grade C ; signal '
         'contraire sur un timeframe supérieur ; marché fermé ou données absentes.</div>'
@@ -276,8 +269,15 @@ def run_levels(pairs, nonce=0):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def run_entry(pairs, nonce=0):
-    """Entrée par style (Scalping, Swing), logique du script Analysis_entry_distance ; nonce = bouton Rafraîchir."""
-    return {p: bse.entry_by_style(bse.frames_for_pair(p)) for p in pairs}
+    """Entrée par style (Scalping, Swing), logique du script Analysis_entry_distance ; nonce = bouton Rafraîchir.
+    Une erreur sur une paire n'interrompt pas les autres : cette paire affiche « n/d »."""
+    out = {}
+    for p in pairs:
+        try:
+            out[p] = bse.entry_by_style(bse.frames_for_pair(p))
+        except Exception:
+            logging.getLogger("bbma").exception("entrée par style %s", p)
+    return out
 
 
 def rsi_html(value) -> str:
@@ -449,7 +449,7 @@ def build_table(pairs, tfs, res, trends, feats, use_filter, show_recent=False, n
             + "".join(f"<th>{t}</th>" for t in tfs)
             + ('<th class="s5 hmtf">Pattern MTF</th>' if patterns else '')
             + '<th class="s1 hmtf">Entrée BBMA</th><th class="s2 hmtf">Confiance</th>'
-            + '<th class="s4 hmtf">Jauge</th><th class="s4 hmtf">Nuclear</th><th class="s3 hmtf">Qualité</th><th class="hmtf">Entrée</th></tr>')
+            + '<th class="s4 hmtf">Jauge</th><th class="s4 hmtf">Nuclear</th><th class="s3 hmtf">Qualité</th><th class="hmtf">Style (Scal / Swing)</th></tr>')
     return f'<div class="bb-wrap"><table class="bb">{head}{"".join(rows)}</table></div>'
 
 
@@ -511,6 +511,9 @@ def sidebar_settings():
 
 def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
+    if not welcome.passed():          # page d'accueil : le scanner s'affiche après acceptation
+        welcome.render()
+        st.stop()
     st.title(APP_TITLE)
 
     pairs, tfs, use_filter, auto, show_recent = sidebar_settings()
