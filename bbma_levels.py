@@ -103,6 +103,8 @@ def sr_levels(df, extra=(), k=PIVOT_K, tol_atr=TOL_ATR, near_atr=NEAR_ATR, break
       sup      : {atr, touches, src, strength} du support le plus proche sous le prix, ou None
       on_level : True si la clôture est à moins de near_atr × ATR d'un niveau valide
       atr      : valeur de l'ATR utilisée
+      close    : dernière clôture fermée (prix de référence)
+      (chaque niveau contient aussi "price", le prix absolu du niveau)
       casses   : nombre de niveaux ignorés car déjà franchis depuis leur dernier contact"""
     if len(df) <= ATR_PERIOD:
         return None
@@ -140,7 +142,7 @@ def sr_levels(df, extra=(), k=PIVOT_K, tol_atr=TOL_ATR, near_atr=NEAR_ATR, break
             return None
         z = min(cands, key=lambda x: abs(x["price"] - close))
         return {"atr": abs(z["price"] - close) / a, "touches": z["touches"], "src": z["src"],
-                "strength": round(z["strength"], 2)}
+                "strength": round(z["strength"], 2), "price": z["price"]}
 
     return {
         "res": nearest(above),
@@ -149,6 +151,7 @@ def sr_levels(df, extra=(), k=PIVOT_K, tol_atr=TOL_ATR, near_atr=NEAR_ATR, break
         "sup_franchi": nearest([z for z in broken_below if z["price"] < close - near]),
         "on_level": on,
         "atr": a,
+        "close": close,
         "casses": len(broken_above) + len(broken_below),
     }
 
